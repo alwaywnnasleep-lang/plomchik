@@ -1,0 +1,116 @@
+.
+├── apps
+│   ├── audit
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── __init__.py
+│   │   ├── middleware.py
+│   │   ├── migrations
+│   │   │   ├── 0001_initial.py
+│   │   │   ├── 0002_initial.py
+│   │   │   ├── 0003_alter_auditlog_category_alter_auditlog_created_at_and_more.py
+│   │   │   └── __init__.py
+│   │   ├── models.py
+│   │   ├── serializers.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   ├── autoplan
+│   │   ├── apps.py
+│   │   ├── celery_tasks.py
+│   │   ├── __init__.py
+│   │   ├── migrations
+│   │   │   ├── 0001_initial.py
+│   │   │   ├── 0002_initial.py
+│   │   │   ├── 0003_alter_parseddocument_options_and_more.py
+│   │   │   └── __init__.py
+│   │   ├── models.py
+│   │   ├── parsers.py
+│   │   ├── serializers.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   ├── __init__.py
+│   ├── notifications
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── __init__.py
+│   │   ├── migrations
+│   │   │   ├── 0001_initial.py
+│   │   │   ├── 0002_initial.py
+│   │   │   ├── 0003_initial.py
+│   │   │   ├── 0004_alter_notification_created_at_and_more.py
+│   │   │   └── __init__.py
+│   │   ├── models.py
+│   │   ├── serializers.py
+│   │   ├── services.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   ├── security
+│   │   ├── apps.py
+│   │   ├── encryption.py
+│   │   ├── __init__.py
+│   │   ├── middleware.py
+│   │   ├── serializers.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   ├── structure
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── __init__.py
+│   │   ├── migrations
+│   │   │   ├── 0001_initial.py
+│   │   │   ├── 0002_initial.py
+│   │   │   ├── 0003_alter_orgunit_created_at_alter_orgunit_name_and_more.py
+│   │   │   └── __init__.py
+│   │   ├── models.py
+│   │   ├── permissions.py
+│   │   ├── serializers.py
+│   │   ├── services.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   ├── tasks
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── filters.py
+│   │   ├── __init__.py
+│   │   ├── migrations
+│   │   │   ├── 0001_initial.py
+│   │   │   ├── 0002_initial.py
+│   │   │   ├── 0003_alter_task_options_alter_taskattachment_options_and_more.py
+│   │   │   └── __init__.py
+│   │   ├── models.py
+│   │   ├── permissions.py
+│   │   ├── serializers.py
+│   │   ├── signals.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   └── users
+│       ├── admin.py
+│       ├── apps.py
+│       ├── __init__.py
+│       ├── management
+│       │   ├── commands
+│       │   └── __init__.py
+│       ├── migrations
+│       │   ├── 0001_initial.py
+│       │   ├── 0002_alter_user_options_alter_user_clearance_level_and_more.py
+│       │   └── __init__.py
+│       ├── models.py
+│       ├── permissions.py
+│       ├── serializers.py
+│       ├── urls.py
+│       └── views.py
+├── logs
+│   ├── rubezh.log
+│   └── security.log
+├── manage.py
+├── project_structure.txt
+├── requirements.txt
+└── rubezh
+    ├── asgi.py
+    ├── celery.py
+    ├── __init__.py
+    ├── settings.py
+    ├── urls.py
+    └── wsgi.py
+
+19 directories, 95 files

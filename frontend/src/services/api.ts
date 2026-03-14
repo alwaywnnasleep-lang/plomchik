@@ -1,0 +1,362 @@
+const API_BASE_URL = 'http://localhost:8000/api';
+
+class ApiService {
+  private token: string | null = null;
+
+  constructor() {
+    this.token = localStorage.getItem('access_token');
+  }
+
+  setToken(token: string) {
+    this.token = token;
+    localStorage.setItem('access_token', token);
+  }
+
+  getToken() {
+    return this.token || localStorage.getItem('access_token');
+  }
+
+  clearToken() {
+    this.token = null;
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+  }
+
+  async refreshToken() {
+    const refresh = localStorage.getItem('refresh_token');
+    if (!refresh) throw new Error('No refresh token');
+
+    const response = await fetch(`${API_BASE_URL}/auth/refresh/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      this.setToken(data.access);
+      return data.access;
+    }
+    throw new Error('Failed to refresh token');
+  }
+
+  async request(endpoint: string, options: RequestInit = {}) {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const token = this.getToken();
+
+    // Создаем объект headers с правильной типизацией
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string> || {}),
+    };
+
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    try {
+      let response = await fetch(url, { 
+        ...options, 
+        headers 
+      });
+
+      if (response.status === 401 && token) {
+        try {
+          const newToken = await this.refreshToken();
+          headers['Authorization'] = `Bearer ${newToken}`;
+          response = await fetch(url, { ...options, headers });
+        } catch (refreshError) {
+          this.clearToken();
+          window.location.href = '/login';
+          throw new Error('Session expired');
+        }
+      }
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || `API Error: ${response.status}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      console.error('API Request failed:', error);
+      throw error;
+    }
+  }
+
+  // ========== Аутентификация ==========
+  async login(username: string, password: string) {
+    const response = await fetch(`${API_BASE_URL}/auth/login/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Login failed');
+    }
+
+    const data = await response.json();
+    this.setToken(data.access);
+    localStorage.setItem('refresh_token', data.refresh);
+    return data;
+  }
+
+  async logout() {
+    const refresh = localStorage.getItem('refresh_token');
+    if (refresh) {
+      try {
+        await fetch(`${API_BASE_URL}/auth/logout/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh }),
+        });
+      } catch (error) {
+        console.error('Logout error:', error);
+      }
+    }
+    this.clearToken();
+  }
+
+  // ========== Пользователи ==========
+  getUsers() {
+    return this.request('/users/');
+  }
+  async getAllUsers() {
+  let page = 1;
+  let allUsers: any[] = [];
+  let hasNext = true;
+
+  while (hasNext) {
+    const response = await this.request(`/users/?page=${page}`);
+    if (response.results) {
+      allUsers = [...allUsers, ...response.results];
+      hasNext = !!response.next;
+      page++;
+    } else {
+      hasNext = false;
+    }
+  }
+  return allUsers;
+}
+  getCurrentUser() {
+    return this.request('/users/me/');
+  }
+
+  getUser(id: number) {
+    return this.request(`/users/${id}/`);
+  }
+
+  changePassword(oldPassword: string, newPassword: string, confirmPassword: string) {
+    return this.request('/users/change-password/', {
+      method: 'POST',
+      body: JSON.stringify({ 
+        old_password: oldPassword, 
+        new_password: newPassword, 
+        confirm_password: confirmPassword 
+      }),
+    });
+  }
+  updateUser(id: number, data: any) {
+  return this.request(`/users/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+  // ========== Задачи ==========
+  getTasks(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params) : '';
+    return this.request(`/tasks/${query}`);
+  }
+
+  getTask(id: number) {
+    return this.request(`/tasks/${id}/`);
+  }
+
+  createTask(task: any) {
+    return this.request('/tasks/', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+  }
+
+  updateTask(id: number, task: any) {
+    return this.request(`/tasks/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(task),
+    });
+  }
+
+  deleteTask(id: number) {
+    return this.request(`/tasks/${id}/`, {
+      method: 'DELETE',
+    });
+  }
+
+  moveTask(id: number, status: string, order?: number) {
+    return this.request(`/tasks/${id}/move/`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, order: order || 0 }),
+    });
+  }
+
+  getKanban() {
+    return this.request('/tasks/kanban/');
+  }
+
+  getDashboardStats() {
+    return this.request('/tasks/dashboard/');
+  }
+
+  uploadTaskAttachment(taskId: number, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    return fetch(`${API_BASE_URL}/tasks/${taskId}/attachments/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.getToken()}`,
+      },
+      body: formData,
+    }).then(res => res.json());
+  }
+
+  getTaskAttachments(taskId: number) {
+    return this.request(`/tasks/${taskId}/attachments/`);
+  }
+
+  // ========== Оргструктура ==========
+  getOrgTree() {
+    return this.request('/structure/tree/');
+  }
+
+  getUnits() {
+    return this.request('/structure/units/');
+  }
+
+  getUnit(id: number) {
+    return this.request(`/structure/units/${id}/`);
+  }
+
+  createUnit(unit: any) {
+    return this.request('/structure/units/', {
+      method: 'POST',
+      body: JSON.stringify(unit),
+    });
+  }
+
+  updateUnit(id: number, unit: any) {
+    return this.request(`/structure/units/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(unit),
+    });
+  }
+
+  deleteUnit(id: number) {
+    return this.request(`/structure/units/${id}/`, {
+      method: 'DELETE',
+    });
+  }
+
+  movePersonnel(userId: number, targetUnitId: number) {
+    return this.request('/structure/move-personnel/', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, target_unit_id: targetUnitId }),
+    });
+  }
+
+  getStructureHistory() {
+    return this.request('/structure/history/');
+  }
+
+  // ========== Уведомления ==========
+  getNotifications(unreadOnly = false) {
+    const query = unreadOnly ? '?unread=true' : '';
+    return this.request(`/notifications/${query}`);
+  }
+
+  markNotificationRead(id: number) {
+    return this.request(`/notifications/${id}/read/`, {
+      method: 'PATCH',
+    });
+  }
+
+  markAllNotificationsRead() {
+    return this.request('/notifications/read-all/', {
+      method: 'POST',
+    });
+  }
+
+  deleteNotification(id: number) {
+    return this.request(`/notifications/${id}/delete/`, {
+      method: 'DELETE',
+    });
+  }
+
+  getUnreadCount() {
+    return this.request('/notifications/unread-count/');
+  }
+
+  // ========== Аудит ==========
+  getAuditLogs(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params) : '';
+    return this.request(`/audit/logs/${query}`);
+  }
+
+  getAuditStats() {
+    return this.request('/audit/stats/');
+  }
+
+  // ========== Автопланирование ==========
+  uploadDocument(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    return fetch(`${API_BASE_URL}/autoplan/upload/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.getToken()}`,
+      },
+      body: formData,
+    }).then(res => res.json());
+  }
+
+  getDocuments() {
+    return this.request('/autoplan/documents/');
+  }
+
+  getDocument(id: number) {
+    return this.request(`/autoplan/documents/${id}/`);
+  }
+
+  deleteDocument(id: number) {
+    return this.request(`/autoplan/documents/${id}/`, {
+      method: 'DELETE',
+    });
+  }
+
+  generateTasks(documentId: number, selectedIndices: number[], priority: string, orgUnitId?: number) {
+    return this.request(`/autoplan/documents/${documentId}/generate/`, {
+      method: 'POST',
+      body: JSON.stringify({
+        selected_indices: selectedIndices,
+        priority: priority,
+        org_unit_id: orgUnitId,
+      }),
+    });
+  }
+
+  parseDocumentSync(documentId: number) {
+    return this.request(`/autoplan/documents/${documentId}/parse-sync/`, {
+      method: 'POST',
+    });
+  }
+
+  // ========== Безопасность ==========
+  getSecurityStatus() {
+    return this.request('/security/status/');
+  }
+}
+
+export default new ApiService();
