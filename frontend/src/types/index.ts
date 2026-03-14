@@ -3,12 +3,19 @@ export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'review' | 'done';
 export type NotificationType = 'task_assigned' | 'deadline_approaching' | 'task_completed' | 'structure_changed' | 'comment';
 
 export interface User {
-  id: string;
-  fullName: string;
+  id: string | number;
+  fullName?: string;
+  first_name?: string;
+  last_name?: string;
+  patronymic?: string;
   rank: string;
   position: string;
-  unitId: string;
-  avatarColor: string;
+  unitId?: string;
+  avatarColor?: string;
+  role?: string;
+  clearance_level?: number;
+  date_joined?: string;
+  last_login?: string;
 }
 
 export interface OrgUnit {

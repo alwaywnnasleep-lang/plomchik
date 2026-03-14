@@ -5,11 +5,12 @@ import {
   BarChart3, Activity, Briefcase, Medal
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+
 import api from '@/services/api';
 import { cn } from '@/utils/cn';
 
 export function Profile() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'stats'>('profile');
   const [editMode, setEditMode] = useState(false);
   const [formData, setFormData] = useState({
@@ -44,8 +45,9 @@ export function Profile() {
   }, [user]);
 
   const loadUserTasks = async () => {
+    if (!user || typeof user.id === 'undefined') return;
     try {
-      const tasks = await api.getTasks({ assigned_to: user?.id.toString() });
+      const tasks = await api.getTasks({ assigned_to: String(user.id) });
       const tasksArray = Array.isArray(tasks) ? tasks : (tasks.results || []);
       setUserTasks(tasksArray);
       
@@ -64,10 +66,11 @@ export function Profile() {
   };
 
   const handleProfileUpdate = async () => {
+    if (!user || typeof user.id === 'undefined') return;
     setLoading(true);
     setMessage({ type: '', text: '' });
     try {
-      await api.updateUser(user?.id, formData);
+      await api.updateUser(user.id, formData);
       setMessage({ type: 'success', text: 'Профиль успешно обновлен' });
       setEditMode(false);
       // Обновляем данные пользователя
@@ -367,7 +370,7 @@ export function Profile() {
                     <label className="text-xs font-medium text-slate-500 mb-1 block">Дата регистрации</label>
                     <div className="text-sm text-slate-700 flex items-center gap-1">
                       <Calendar size={12} className="text-slate-400" />
-                      {user.date_joined ? new Date(user.date_joined).toLocaleDateString('ru-RU') : '—'}
+                      {'date_joined' in user && (user as any).date_joined ? new Date((user as any).date_joined).toLocaleDateString('ru-RU') : '—'}
                     </div>
                   </div>
                 </div>
@@ -463,7 +466,7 @@ export function Profile() {
                   <span className="text-sm text-slate-700">Последний вход</span>
                 </div>
                 <span className="text-sm text-slate-600">
-                  {user.last_login ? new Date(user.last_login).toLocaleString('ru-RU') : '—'}
+                  {'last_login' in user && (user as any).last_login ? new Date((user as any).last_login).toLocaleString('ru-RU') : '—'}
                 </span>
               </div>
               <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
