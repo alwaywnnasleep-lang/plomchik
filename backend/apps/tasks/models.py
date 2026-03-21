@@ -1,6 +1,8 @@
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.conf import settings
+from django.utils.timezone import now
+
 
 class Task(models.Model):
     class Status(models.TextChoices):
@@ -9,13 +11,13 @@ class Task(models.Model):
         IN_PROGRESS = 'in_progress', 'В работе'
         REVIEW = 'review', 'На проверке'
         DONE = 'done', 'Выполнена'
-    
+
     class Priority(models.TextChoices):
         CRITICAL = 'critical', 'Критический'
         HIGH = 'high', 'Высокий'
         MEDIUM = 'medium', 'Средний'
         LOW = 'low', 'Низкий'
-    
+
     title = models.CharField('Название', max_length=500)
     description = models.TextField('Описание', blank=True, default='')
     status = models.CharField('Статус', max_length=20, choices=Status.choices, default=Status.PLANNED)
@@ -57,7 +59,10 @@ class Task(models.Model):
     order = models.IntegerField('Порядок', default=0, validators=[MinValueValidator(0)])
     created_at = models.DateTimeField('Создано', auto_now_add=True)
     updated_at = models.DateTimeField('Обновлено', auto_now=True)
-    
+
+    def is_overdue(self):
+        return self.deadline and self.deadline < now()
+
     class Meta:
         verbose_name = 'Задача'
         verbose_name_plural = 'Задачи'
@@ -72,14 +77,9 @@ class Task(models.Model):
             models.Index(fields=['deadline']),
             models.Index(fields=['-created_at']),
         ]
-    
+
     def __str__(self):
         return self.title
-    
-    @property
-    def is_overdue(self):
-        from django.utils import timezone
-        return self.deadline and self.deadline < timezone.now() and self.status != self.Status.DONE
 
 
 class TaskAttachment(models.Model):
@@ -100,7 +100,7 @@ class TaskAttachment(models.Model):
         related_name='uploaded_attachments'
     )
     created_at = models.DateTimeField('Загружено', auto_now_add=True)
-    
+
     class Meta:
         verbose_name = 'Вложение задачи'
         verbose_name_plural = 'Вложения задач'
@@ -108,6 +108,130 @@ class TaskAttachment(models.Model):
             models.Index(fields=['task']),
             models.Index(fields=['uploaded_by']),
         ]
-    
+
+    def __str__(self):
+        return self.filename
+
+
+class TaskComment(models.Model):
+    """Комментарий к задаче."""
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name='comments',
+        verbose_name='Задача'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        verbose_name='Автор',
+        related_name='task_comments'
+    )
+    text = models.TextField('Текст комментария')
+    created_at = models.DateTimeField('Создано', auto_now_add=True)
+    updated_at = models.DateTimeField('Обновлено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Комментарий'
+        verbose_name_plural = 'Комментарии'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Комментарий к {self.task} от {self.user}'
+
+
+class CommentAttachment(models.Model):
+    """Вложение к комментарию."""
+    comment = models.ForeignKey(
+        TaskComment,
+        on_delete=models.CASCADE,
+        related_name='attachments',
+        verbose_name='Комментарий'
+    )
+    file = models.FileField('Файл', upload_to='comment_attachments/%Y/%m/%d/')
+    filename = models.CharField('Имя файла', max_length=255)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='Загрузил',
+        related_name='uploaded_comment_attachments'
+    )
+    created_at = models.DateTimeField('Загружено', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Вложение комментария'
+        verbose_name_plural = 'Вложения комментариев'
+
+    def __str__(self):
+        return self.filename
+
+
+class TaskSubmission(models.Model):
+    """Сдача задания."""
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'На проверке'
+        APPROVED = 'approved', 'Принято'
+        REJECTED = 'rejected', 'Отклонено'
+
+    task = models.OneToOneField(
+        Task,
+        on_delete=models.CASCADE,
+        related_name='submission',
+        verbose_name='Задача'
+    )
+    status = models.CharField(
+        'Статус',
+        max_length=10,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+    comment = models.TextField('Комментарий к сдаче', blank=True, default='')
+    submitted_at = models.DateTimeField('Дата сдачи', auto_now_add=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_submissions',
+        verbose_name='Проверил'
+    )
+    reviewed_at = models.DateTimeField('Дата проверки', null=True, blank=True)
+    review_comment = models.TextField('Комментарий проверяющего', blank=True, default='')
+
+    class Meta:
+        verbose_name = 'Сдача задания'
+        verbose_name_plural = 'Сдачи заданий'
+
+    def __str__(self):
+        return f'Сдача {self.task}'
+
+
+class SubmissionAttachment(models.Model):
+    """Вложение к сдаче задания."""
+    submission = models.ForeignKey(
+        TaskSubmission,
+        on_delete=models.CASCADE,
+        related_name='files',
+        verbose_name='Сдача'
+    )
+    file = models.FileField('Файл', upload_to='submission_attachments/%Y/%m/%d/')
+    filename = models.CharField('Имя файла', max_length=255)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='Загрузил',
+        related_name='uploaded_submission_attachments'
+    )
+    created_at = models.DateTimeField('Загружено', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Вложение сдачи'
+        verbose_name_plural = 'Вложения сдач'
+
     def __str__(self):
         return self.filename

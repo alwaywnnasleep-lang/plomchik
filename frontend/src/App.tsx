@@ -3,7 +3,6 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar } from '@/components/Sidebar';
 import { Header } from '@/components/Header';
 import { Dashboard } from '@/components/Dashboard';
-import { KanbanBoard } from '@/components/KanbanBoard';
 import { OrgStructure } from '@/components/OrgStructure';
 import { AutoPlan } from '@/components/AutoPlan';
 import { Notifications } from '@/components/Notifications';
@@ -13,11 +12,10 @@ import { DocsPage } from '@/components/DocsPage';
 import { Login } from '@/components/Login';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/services/api';
-import type { Task, Notification, OrgUnit } from '@/types';
+import type { Task, Notification, OrgUnit, TaskFile } from '@/types';
 import { cn } from '@/utils/cn';
-import { Statistics } from '@/components/Statistics';
 import { Profile } from '@/components/Profile';
-
+import { TaskManagement } from '@/components/TaskManagement';
 
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -28,7 +26,6 @@ function App() {
   const [units, setUnits] = useState<OrgUnit[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Загрузка данных при монтировании
   useEffect(() => {
     if (isAuthenticated) {
       loadData();
@@ -36,33 +33,36 @@ function App() {
   }, [isAuthenticated]);
 
   const loadData = async () => {
-  try {
-    const [tasksData, notifsData, unitsData, unreadData] = await Promise.all([
-      api.getTasks(),
-      api.getNotifications(),
-      api.getUnits(),
-      api.getUnreadCount(),
-    ]);
-    
-    console.log('Tasks data:', tasksData); // Добавьте логи для отладки
-    console.log('Units data:', unitsData);
-    
-    // Проверяем, что данные - это массивы
-    setTasks(Array.isArray(tasksData) ? transformTasks(tasksData) : []);
-    setNotifications(Array.isArray(notifsData) ? transformNotifications(notifsData) : []);
-    setUnits(Array.isArray(unitsData) ? transformUnits(unitsData) : []);
-    setUnreadCount(unreadData?.unread_count || 0);
-  } catch (error) {
-    console.error('Failed to load data:', error);
-  }
-};
+    try {
+      const [tasksData, notifsData, unitsData, unreadData] = await Promise.all([
+        api.getTasks(),
+        api.getNotifications(),
+        api.getOrgTree(),
+        api.getUnreadCount(),
+      ]);
 
-  // Трансформеры данных (адаптеры между API и компонентами)
+      console.log('Tasks data:', tasksData);
+      console.log('Units tree data:', unitsData);
+
+      // Обработка пагинированных ответов
+      const tasksList = Array.isArray(tasksData) ? tasksData : (tasksData.results || []);
+      const notifsList = Array.isArray(notifsData) ? notifsData : (notifsData.results || []);
+      const unitsList = Array.isArray(unitsData) ? unitsData : (unitsData.results || []);
+
+      setTasks(transformTasks(tasksList));
+      setNotifications(transformNotifications(notifsList));
+      setUnits(unitsList);
+      setUnreadCount(unreadData?.unread_count || 0);
+    } catch (error) {
+      console.error('Failed to load data:', error);
+    }
+  };
+
   const transformTasks = (apiTasks: any[]): Task[] => {
     return apiTasks.map(t => ({
       id: t.id.toString(),
       title: t.title,
-      description: t.description,
+      description: t.description || '',
       status: t.status,
       priority: t.priority,
       assigneeId: t.assigned_to?.toString() || '',
@@ -71,11 +71,53 @@ function App() {
       deadline: t.deadline || '',
       createdAt: t.created_at,
       tags: t.tags || [],
-      subtasks: t.subtasks?.map((st: any) => ({
+      subtasks: (t.subtasks || []).map((st: any) => ({
         id: st.id.toString(),
         title: st.title,
         done: st.status === 'done',
-      })) || [],
+      })),
+      comments: (t.comments || []).map((c: any) => ({
+        id: c.id.toString(),
+        taskId: c.task.toString(),
+        userId: c.user?.toString() || '',
+        userFullName: c.user_full_name || '',
+        userRank: c.user_rank || '',
+        text: c.text,
+        createdAt: c.created_at,
+        attachments: (c.attachments || []).map((att: any) => ({
+          id: att.id.toString(),
+          url: att.file,
+          name: att.filename,
+          type: att.file?.split('.').pop(),
+        })),
+      })),
+      attachments: (t.attachments || []).map((att: any): TaskFile => ({
+        id: att.id.toString(),
+        fileName: att.filename || att.fileName || 'Файл',
+        fileUrl: att.file,
+        uploadedBy: att.uploaded_by,
+        uploadedByName: att.uploaded_by_name,
+        createdAt: att.created_at,
+      })),
+      submission: t.submission ? {
+        id: t.submission.id.toString(),
+        status: t.submission.status,
+        comment: t.submission.comment,
+        submittedAt: t.submission.submitted_at,
+        reviewedBy: t.submission.reviewed_by,
+        reviewedAt: t.submission.reviewed_at,
+        reviewComment: t.submission.review_comment,
+        files: (t.submission.files || []).map((f: any): TaskFile => ({
+          id: f.id.toString(),
+          fileName: f.filename || f.fileName || 'Файл',
+          fileUrl: f.file,
+        })),
+        reviewFiles: (t.submission.review_files || []).map((f: any): TaskFile => ({
+          id: f.id.toString(),
+          fileName: f.filename || f.fileName || 'Файл',
+          fileUrl: f.file,
+        })),
+      } : undefined,
     }));
   };
 
@@ -90,21 +132,7 @@ function App() {
     }));
   };
 
-  const transformUnits = (apiUnits: any[]): OrgUnit[] => {
-    // Рекурсивно преобразуем дерево
-    const transformUnit = (u: any): OrgUnit => ({
-      id: u.id.toString(),
-      name: u.name,
-      parentId: u.parent?.toString() || null,
-      commanderId: u.commander?.toString() || null,
-      type: u.unit_type,
-      children: u.children?.map(transformUnit),
-    });
-    return apiUnits.map(transformUnit);
-  };
-
   const handleTasksGenerated = useCallback(async (newTasks: Task[]) => {
-    // Здесь нужно будет отправлять задачи на бэкенд
     setTasks(prev => [...prev, ...newTasks]);
   }, []);
 
@@ -134,7 +162,7 @@ function App() {
             rank: user?.rank || '',
             position: user?.position || '',
             unitId: user?.org_unit?.toString() || '',
-            avatarColor: '#2563eb', // Можно генерировать на основе id
+            avatarColor: '#2563eb',
           }}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -145,13 +173,6 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard tasks={tasks} />} />
-            <Route path="/kanban" element={
-              <KanbanBoard 
-                tasks={tasks} 
-                onTasksChange={setTasks} 
-                searchQuery={searchQuery} 
-              />
-            } />
             <Route path="/structure" element={
               <OrgStructure units={units} onUnitsChange={setUnits} />
             } />
@@ -167,9 +188,17 @@ function App() {
             <Route path="/logs" element={<AuditLogs />} />
             <Route path="/security" element={<SecurityPanel />} />
             <Route path="/docs" element={<DocsPage />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/statistics" element={<Statistics tasks={tasks} />} />
             <Route path="/profile" element={<Profile />} />
+            <Route path="/tasks" element={
+              <TaskManagement 
+                tasks={tasks} 
+                onTasksChange={setTasks} 
+                searchQuery={searchQuery} 
+              />
+            } />
+            <Route path="/kanban" element={<Navigate to="/tasks" replace />} />
+            <Route path="/statistics" element={<Navigate to="/tasks" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
       </div>

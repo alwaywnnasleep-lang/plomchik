@@ -1,9 +1,26 @@
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils import timezone
+from datetime import datetime, timedelta
+from threading import Timer
 
 from apps.users.permissions import IsCommanderOrDeputy
 from apps.audit.models import AuditLog
+
+
+class ReminderService:
+    reminders = []
+
+    @staticmethod
+    def add_reminder(event_time, message):
+        delay = (event_time - datetime.now()).total_seconds()
+        if delay > 0:
+            Timer(delay, ReminderService.trigger_reminder, [message]).start()
+            ReminderService.reminders.append({'time': event_time, 'message': message})
+
+    @staticmethod
+    def trigger_reminder(message):
+        print(f"Reminder: {message}")
 
 
 class SecurityStatusView(APIView):
@@ -48,14 +65,15 @@ class SecurityStatusView(APIView):
             'backup': {
                 'status': 'active',
                 'frequency': 'Ежедневно',
-                'encrypted': True,
-                'retention_days': 90,
-            },
-            'compliance': {
-                'gost_r_57580': True,
-                'fstek_orders': True,
-                'fsb_requirements': True,
             },
         }
-
         return Response(data)
+
+    def post(self, request):
+        event_time = request.data.get('event_time')
+        message = request.data.get('message')
+        if event_time and message:
+            event_time = datetime.fromisoformat(event_time)
+            ReminderService.add_reminder(event_time, message)
+            return Response({'status': 'Reminder set successfully'})
+        return Response({'error': 'Invalid data'}, status=400)

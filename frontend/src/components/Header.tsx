@@ -35,6 +35,7 @@ export function Header({ currentUser, searchQuery, onSearchChange, unreadCount, 
   };
 
   const getInitials = () => {
+    if (!currentUser.fullName) return '';
     return currentUser.fullName.split(' ').map(n => n[0]).join('');
   };
 

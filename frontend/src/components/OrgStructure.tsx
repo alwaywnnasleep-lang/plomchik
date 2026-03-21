@@ -5,8 +5,8 @@ import {
 } from 'lucide-react';
 import type { OrgUnit } from '@/types';
 import { cn } from '@/utils/cn';
-import { v4 as uuidv4 } from 'uuid';
 import api from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface OrgStructureProps {
   units: OrgUnit[];
@@ -14,6 +14,7 @@ interface OrgStructureProps {
 }
 
 export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
+  const { user } = useAuth();
   const [showHistory, setShowHistory] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addParentId, setAddParentId] = useState<string | null>(null);
@@ -21,37 +22,23 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
   const [structureHistory, setStructureHistory] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   // Загрузка пользователей и истории
   useEffect(() => {
-    loadUsers();
-    loadHistory();
+    Promise.all([loadUsers(), loadHistory()]).finally(() => setInitialLoading(false));
   }, []);
 
-    const loadUsers = async () => {
+  const loadUsers = async () => {
     try {
       const usersData = await api.getUsers();
-      console.log('Users data:', usersData);
       
-      // Проверяем структуру ответа
       if (Array.isArray(usersData)) {
         setUsers(usersData);
-      } else if (usersData && typeof usersData === 'object') {
-        // Если это объект с results (пагинация)
-        if (usersData.results && Array.isArray(usersData.results)) {
-          setUsers(usersData.results);
-        } else {
-          // Если это объект, но не массив и не имеет results
-          // Возможно, API возвращает объект с пользователями в другом формате
-          const possibleArray = Object.values(usersData).find(val => Array.isArray(val));
-          if (possibleArray) {
-            setUsers(possibleArray);
-          } else {
-            console.error('Could not find users array in response:', usersData);
-            setUsers([]);
-          }
-        }
+      } else if (usersData?.results && Array.isArray(usersData.results)) {
+        setUsers(usersData.results);
       } else {
+        console.error('Unexpected users data format:', usersData);
         setUsers([]);
       }
     } catch (error) {
@@ -59,10 +46,10 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
       setUsers([]);
     }
   };
+
   const loadHistory = async () => {
     try {
       const historyData = await api.getStructureHistory();
-      console.log('History data:', historyData);
       
       if (Array.isArray(historyData)) {
         setStructureHistory(historyData);
@@ -77,15 +64,28 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
     }
   };
 
-  const buildTree = (parentId: string | null): OrgUnit[] => {
-    return units
-      .filter(u => u.parentId === parentId)
-      .map(u => ({ ...u, children: buildTree(u.id) }));
+  // Проверка прав на редактирование
+  const canEdit = user?.role === 'commander' || user?.role === 'deputy_commander';
+
+  const flattenUnits = (nodes: OrgUnit[]): OrgUnit[] => {
+    let all: OrgUnit[] = [];
+    for (const n of nodes) {
+      all.push(n);
+      if (n.children && n.children.length) {
+        all = all.concat(flattenUnits(n.children));
+      }
+    }
+    return all;
   };
 
-  const tree = buildTree(null);
+  const allUnits = flattenUnits(units);
 
   const handleAddUnit = async (name: string, type: OrgUnit['type'], commanderId: string | null, parentId: string | null) => {
+    if (!canEdit) {
+      alert('У вас нет прав для создания подразделений');
+      return;
+    }
+    
     setLoading(true);
     try {
       const newUnit = await api.createUnit({
@@ -96,7 +96,6 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
         order: 0
       });
       
-      // Преобразуем ответ API в формат компонента
       const transformedUnit: OrgUnit = {
         id: newUnit.id.toString(),
         name: newUnit.name,
@@ -106,7 +105,7 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
       };
       
       onUnitsChange([...units, transformedUnit]);
-      await loadHistory(); // Обновляем историю
+      await loadHistory();
       setShowAddModal(false);
     } catch (error) {
       console.error('Failed to create unit:', error);
@@ -117,6 +116,11 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
   };
 
   const handleDeleteUnit = async (id: string) => {
+    if (!canEdit) {
+      alert('У вас нет прав для удаления подразделений');
+      return;
+    }
+
     const hasChildren = units.some(u => u.parentId === id);
     if (hasChildren) {
       alert('Нельзя удалить подразделение с дочерними элементами');
@@ -139,6 +143,11 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
   };
 
   const handleUpdateUnit = async (updated: OrgUnit) => {
+    if (!canEdit) {
+      alert('У вас нет прав для редактирования подразделений');
+      return;
+    }
+
     setLoading(true);
     try {
       await api.updateUnit(parseInt(updated.id), {
@@ -159,10 +168,15 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
   };
 
   const handleMovePersonnel = async (userId: string, targetUnitId: string) => {
+    if (!canEdit) {
+      alert('У вас нет прав для перемещения личного состава');
+      return;
+    }
+
     setLoading(true);
     try {
       await api.movePersonnel(parseInt(userId), parseInt(targetUnitId));
-      await loadUsers(); // Перезагружаем пользователей
+      await loadUsers();
       await loadHistory();
       alert('Пользователь успешно перемещен');
     } catch (error) {
@@ -172,6 +186,10 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
       setLoading(false);
     }
   };
+
+  if (initialLoading) {
+    return <div className="text-center py-8">Загрузка структуры...</div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -191,14 +209,16 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
             <History size={14} />
             История изменений
           </button>
-          <button
-            onClick={() => { setAddParentId(null); setShowAddModal(true); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800"
-            disabled={loading}
-          >
-            <Plus size={14} />
-            Добавить
-          </button>
+          {canEdit && (
+            <button
+              onClick={() => { setAddParentId(null); setShowAddModal(true); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800"
+              disabled={loading}
+            >
+              <Plus size={14} />
+              Добавить
+            </button>
+          )}
         </div>
       </div>
 
@@ -214,13 +234,14 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
             Дерево подразделений
           </h3>
           <div className="space-y-1">
-            {tree.length > 0 ? (
-              tree.map(node => (
+            {units.length > 0 ? (
+              units.map(node => (
                 <TreeNode
                   key={node.id}
                   node={node}
                   depth={0}
                   users={users}
+                  canEdit={canEdit}
                   onAddChild={(parentId) => { setAddParentId(parentId); setShowAddModal(true); }}
                   onDelete={handleDeleteUnit}
                   onEdit={setEditingUnit}
@@ -243,19 +264,15 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Всего подразделений</span>
-                <span className="font-medium text-slate-800">{units.length}</span>
+                <span className="font-medium text-slate-800">{allUnits.length}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Отделов</span>
-                <span className="font-medium text-slate-800">
-                  {units.filter(u => u.type === 'department').length}
-                </span>
+                <span className="font-medium text-slate-800">{allUnits.filter(u => u.type === 'department').length}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Групп</span>
-                <span className="font-medium text-slate-800">
-                  {units.filter(u => u.type === 'group').length}
-                </span>
+                <span className="font-medium text-slate-800">{allUnits.filter(u => u.type === 'group').length}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Личный состав</span>
@@ -271,29 +288,33 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
               Личный состав
             </h3>
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {users.map(u => {
-                const unit = units.find(ou => ou.id === u.org_unit?.toString());
-                const isCommander = units.some(ou => ou.commanderId === u.id.toString());
-                return (
-                  <div key={u.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50">
-                    <div
-                      className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0"
-                      style={{ backgroundColor: `hsl(${u.id * 100 % 360}, 70%, 50%)` }}
-                    >
-                      {u.full_name?.split(' ').map((n: string) => n[0]).join('') || 'U'}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-medium text-slate-700 truncate">
-                        {u.rank} {u.full_name}
+              {users.length > 0 ? (
+                users.map(u => {
+                  const unit = allUnits.find(ou => ou.id === u.org_unit?.toString());
+                  const isCommander = allUnits.some(ou => ou.commanderId === u.id.toString());
+                  return (
+                    <div key={u.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50">
+                      <div
+                        className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0"
+                        style={{ backgroundColor: `hsl(${u.id * 100 % 360}, 70%, 50%)` }}
+                      >
+                        {u.full_name?.split(' ').map((n: string) => n[0]).join('') || 'U'}
                       </div>
-                      <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                        {isCommander && <UserCog size={9} className="text-amber-500" />}
-                        {unit?.name || '—'}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-medium text-slate-700 truncate">
+                          {translateRank(u.rank)} {u.full_name}
+                        </div>
+                        <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                          {isCommander && <UserCog size={9} className="text-amber-500" />}
+                          {unit?.name || '—'}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              ) : (
+                <div className="text-center py-4 text-slate-400">Нет пользователей</div>
+              )}
             </div>
           </div>
         </div>
@@ -318,7 +339,7 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
                       <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-2">
                         <span>{new Date(h.created_at).toLocaleString('ru-RU')}</span>
                         <span>•</span>
-                        <span>{user?.rank} {user?.full_name}</span>
+                        <span>{user ? `${translateRank(user.rank)} ${user.full_name}` : 'Система'}</span>
                       </div>
                     </div>
                   </div>
@@ -331,7 +352,7 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
         </div>
       )}
 
-      {/* Add Modal */}
+      {/* Modals */}
       {showAddModal && (
         <AddUnitModal
           parentId={addParentId}
@@ -342,7 +363,6 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
         />
       )}
 
-      {/* Edit Modal */}
       {editingUnit && (
         <EditUnitModal
           unit={editingUnit}
@@ -355,10 +375,12 @@ export function OrgStructure({ units, onUnitsChange }: OrgStructureProps) {
   );
 }
 
-function TreeNode({ node, depth, users, onAddChild, onDelete, onEdit, onMovePersonnel }: {
+// ========== TreeNode Component ==========
+function TreeNode({ node, depth, users, canEdit, onAddChild, onDelete, onEdit, onMovePersonnel }: {
   node: OrgUnit & { children?: OrgUnit[] };
   depth: number;
   users: any[];
+  canEdit: boolean;
   onAddChild: (parentId: string) => void;
   onDelete: (id: string) => void;
   onEdit: (unit: OrgUnit) => void;
@@ -397,7 +419,7 @@ function TreeNode({ node, depth, users, onAddChild, onDelete, onEdit, onMovePers
           {commander && (
             <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
               <UserCog size={10} className="text-amber-500" />
-              {commander.rank} {commander.full_name}
+              {translateRank(commander.rank)} {commander.full_name}
             </div>
           )}
           {unitUsers.length > 0 && (
@@ -406,38 +428,40 @@ function TreeNode({ node, depth, users, onAddChild, onDelete, onEdit, onMovePers
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            onClick={() => setShowMoveModal(true)}
-            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-white rounded"
-            title="Переместить личный состав"
-          >
-            <Users size={14} />
-          </button>
-          <button
-            onClick={() => onAddChild(node.id)}
-            className="p-1 text-slate-400 hover:text-green-700 hover:bg-white rounded"
-            title="Добавить дочернее"
-          >
-            <Plus size={14} />
-          </button>
-          <button
-            onClick={() => onEdit(node)}
-            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-white rounded"
-            title="Редактировать"
-          >
-            <Edit3 size={14} />
-          </button>
-          {node.type !== 'unit' && (
+        {canEdit && (
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
-              onClick={() => onDelete(node.id)}
-              className="p-1 text-slate-400 hover:text-red-600 hover:bg-white rounded"
-              title="Удалить"
+              onClick={() => setShowMoveModal(true)}
+              className="p-1 text-slate-400 hover:text-blue-600 hover:bg-white rounded"
+              title="Переместить личный состав"
             >
-              <Trash2 size={14} />
+              <Users size={14} />
             </button>
-          )}
-        </div>
+            <button
+              onClick={() => onAddChild(node.id)}
+              className="p-1 text-slate-400 hover:text-green-700 hover:bg-white rounded"
+              title="Добавить дочернее"
+            >
+              <Plus size={14} />
+            </button>
+            <button
+              onClick={() => onEdit(node)}
+              className="p-1 text-slate-400 hover:text-blue-600 hover:bg-white rounded"
+              title="Редактировать"
+            >
+              <Edit3 size={14} />
+            </button>
+            {node.type !== 'unit' && (
+              <button
+                onClick={() => onDelete(node.id)}
+                className="p-1 text-slate-400 hover:text-red-600 hover:bg-white rounded"
+                title="Удалить"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
       
       {showMoveModal && (
@@ -446,10 +470,7 @@ function TreeNode({ node, depth, users, onAddChild, onDelete, onEdit, onMovePers
           unitName={node.name}
           users={unitUsers}
           onClose={() => setShowMoveModal(false)}
-          onMove={(userId, targetUnitId) => {
-            onMovePersonnel(userId, targetUnitId);
-            setShowMoveModal(false);
-          }}
+          onMove={onMovePersonnel}
         />
       )}
       
@@ -461,6 +482,7 @@ function TreeNode({ node, depth, users, onAddChild, onDelete, onEdit, onMovePers
               node={child as OrgUnit & { children?: OrgUnit[] }}
               depth={depth + 1}
               users={users}
+              canEdit={canEdit}
               onAddChild={onAddChild}
               onDelete={onDelete}
               onEdit={onEdit}
@@ -473,6 +495,7 @@ function TreeNode({ node, depth, users, onAddChild, onDelete, onEdit, onMovePers
   );
 }
 
+// ========== MovePersonnelModal Component ==========
 function MovePersonnelModal({ unitId, unitName, users, onClose, onMove }: {
   unitId: string;
   unitName: string;
@@ -483,6 +506,13 @@ function MovePersonnelModal({ unitId, unitName, users, onClose, onMove }: {
   const [selectedUser, setSelectedUser] = useState('');
   const [targetUnitId, setTargetUnitId] = useState('');
 
+  const handleMove = () => {
+    if (selectedUser && targetUnitId) {
+      onMove(selectedUser, targetUnitId);
+      onClose();
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
@@ -492,6 +522,12 @@ function MovePersonnelModal({ unitId, unitName, users, onClose, onMove }: {
             <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600">
               <X size={20} />
             </button>
+          </div>
+          
+          <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+            <p className="text-sm text-blue-700">
+              Подразделение: <strong>{unitName}</strong>
+            </p>
           </div>
           
           <div className="space-y-4">
@@ -505,22 +541,24 @@ function MovePersonnelModal({ unitId, unitName, users, onClose, onMove }: {
                 <option value="">Выберите сотрудника</option>
                 {users.map(u => (
                   <option key={u.id} value={u.id}>
-                    {u.rank} {u.full_name}
+                    {translateRank(u.rank)} {u.full_name}
                   </option>
                 ))}
               </select>
+              {users.length === 0 && (
+                <p className="text-xs text-slate-400 mt-1">В этом подразделении нет сотрудников</p>
+              )}
             </div>
             
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Целевое подразделение</label>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">ID целевого подразделения</label>
               <input
                 type="text"
                 value={targetUnitId}
                 onChange={(e) => setTargetUnitId(e.target.value)}
-                placeholder="ID подразделения"
+                placeholder="Введите ID подразделения"
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
               />
-              <p className="text-[10px] text-slate-400 mt-1">Введите ID подразделения для перемещения</p>
             </div>
           </div>
           
@@ -529,7 +567,7 @@ function MovePersonnelModal({ unitId, unitName, users, onClose, onMove }: {
               Отмена
             </button>
             <button
-              onClick={() => onMove(selectedUser, targetUnitId)}
+              onClick={handleMove}
               disabled={!selectedUser || !targetUnitId}
               className="px-4 py-2 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -542,6 +580,7 @@ function MovePersonnelModal({ unitId, unitName, users, onClose, onMove }: {
   );
 }
 
+// ========== AddUnitModal Component ==========
 function AddUnitModal({ parentId, units, users, onClose, onAdd }: {
   parentId: string | null;
   units: OrgUnit[];
@@ -591,7 +630,7 @@ function AddUnitModal({ parentId, units, users, onClose, onAdd }: {
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
                 <option value="">Не назначен</option>
                 {users.map((u: any) => (
-                  <option key={u.id} value={u.id}>{u.rank} {u.full_name}</option>
+                  <option key={u.id} value={u.id}>{translateRank(u.rank)} {u.full_name}</option>
                 ))}
               </select>
             </div>
@@ -611,6 +650,7 @@ function AddUnitModal({ parentId, units, users, onClose, onAdd }: {
   );
 }
 
+// ========== EditUnitModal Component ==========
 function EditUnitModal({ unit, users, onClose, onSave }: {
   unit: OrgUnit;
   users: any[];
@@ -640,7 +680,7 @@ function EditUnitModal({ unit, users, onClose, onSave }: {
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
                 <option value="">Не назначен</option>
                 {users.map((u: any) => (
-                  <option key={u.id} value={u.id}>{u.rank} {u.full_name}</option>
+                  <option key={u.id} value={u.id}>{translateRank(u.rank)} {u.full_name}</option>
                 ))}
               </select>
             </div>
@@ -658,4 +698,38 @@ function EditUnitModal({ unit, users, onClose, onSave }: {
       </div>
     </div>
   );
+}
+
+// ========== Translation Utilities ==========
+const RANK_TRANSLATIONS: Record<string, string> = {
+  'private': 'рядовой',
+  'corporal': 'ефрейтор',
+  'sergeant': 'сержант',
+  'staff_sergeant': 'старшина',
+  'warrant_officer': 'прапорщик',
+  'lieutenant': 'лейтенант',
+  'sr_lieutenant': 'ст. лейтенант',
+  'captain': 'капитан',
+  'major': 'майор',
+  'lt_colonel': 'подполковник',
+  'colonel': 'полковник',
+};
+
+const RANK_ABBREVIATIONS: Record<string, string> = {
+  'private': 'ряд.',
+  'corporal': 'ефр.',
+  'sergeant': 'с-т',
+  'staff_sergeant': 'ст-на',
+  'warrant_officer': 'пр-к',
+  'lieutenant': 'л-т',
+  'sr_lieutenant': 'ст. л-т',
+  'captain': 'к-н',
+  'major': 'м-р',
+  'lt_colonel': 'п/п-к',
+  'colonel': 'п-к',
+};
+
+export function translateRank(rank: string): string {
+  if (!rank) return '';
+  return `${RANK_TRANSLATIONS[rank] || rank} (${RANK_ABBREVIATIONS[rank] || rank})`;
 }

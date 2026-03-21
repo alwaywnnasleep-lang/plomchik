@@ -1,12 +1,15 @@
-import { useState } from 'react';
-import { 
-  GripVertical, Calendar, Plus, X, AlertTriangle, 
-  Filter, Tag
+import { useState, useEffect, useRef } from 'react';
+import {
+  GripVertical, Calendar, Plus, X, AlertTriangle,
+  Filter, Tag, MessageCircle, Send, Paperclip,
+  Image, FileText, Download, Edit2, Trash2,
+  Clock, CheckCircle, Upload, Paperclip as PaperclipIcon
 } from 'lucide-react';
-import type { Task, TaskStatus, Priority } from '@/types';
-import { users, orgUnits } from '@/data/mockData';
+import type { Task, TaskStatus, Priority, Comment, User as UserType, TaskFile, TaskSubmission } from '@/types';
 import { cn } from '@/utils/cn';
 import { v4 as uuidv4 } from 'uuid';
+import api from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface KanbanBoardProps {
   tasks: Task[];
@@ -15,7 +18,6 @@ interface KanbanBoardProps {
 }
 
 const columns: { id: TaskStatus; label: string; color: string; bg: string }[] = [
-  { id: 'backlog', label: 'Запланировано', color: 'border-slate-400', bg: 'bg-slate-50' },
   { id: 'todo', label: 'К выполнению', color: 'border-blue-400', bg: 'bg-blue-50' },
   { id: 'in_progress', label: 'В работе', color: 'border-amber-400', bg: 'bg-amber-50' },
   { id: 'review', label: 'На проверке', color: 'border-purple-400', bg: 'bg-purple-50' },
@@ -30,15 +32,41 @@ const priorityConfig: Record<Priority, { label: string; color: string; bg: strin
 };
 
 export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardProps) {
+  const { user } = useAuth();
   const [draggedTask, setDraggedTask] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [filterUnit, setFilterUnit] = useState<string>('all');
   const [filterPriority, setFilterPriority] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [users, setUsers] = useState<UserType[]>([]);
+  const [units, setUnits] = useState<any[]>([]);
+
+  useEffect(() => {
+    loadUsers();
+    loadUnits();
+  }, []);
+
+  const loadUsers = async () => {
+    try {
+      const usersData = await api.getAllUsers();
+      setUsers(usersData);
+    } catch (error) {
+      console.error('Failed to load users:', error);
+    }
+  };
+
+  const loadUnits = async () => {
+    try {
+      const unitsData = await api.getUnits();
+      setUnits(Array.isArray(unitsData) ? unitsData : (unitsData.results || []));
+    } catch (error) {
+      console.error('Failed to load units:', error);
+    }
+  };
 
   const filteredTasks = tasks.filter(t => {
-    const matchesSearch = searchQuery === '' || 
+    const matchesSearch = searchQuery === '' ||
       t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       t.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
       t.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -51,21 +79,94 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
     setDraggedTask(taskId);
   };
 
-  const handleDrop = (status: TaskStatus) => {
+  const handleDrop = async (status: TaskStatus) => {
     if (draggedTask) {
-      onTasksChange(tasks.map(t => t.id === draggedTask ? { ...t, status } : t));
+      const task = tasks.find(t => t.id === draggedTask);
+      if (!task) return;
+
+      const updatedTasks = tasks.map(t => t.id === draggedTask ? { ...t, status } : t);
+      onTasksChange(updatedTasks);
+
+      try {
+        await api.moveTask(parseInt(draggedTask), status, 0);
+      } catch (error) {
+        console.error('Failed to move task:', error);
+        onTasksChange(tasks);
+        alert('Ошибка при перемещении задачи');
+      }
       setDraggedTask(null);
     }
   };
 
-  const handleAddTask = (task: Omit<Task, 'id' | 'createdAt'>) => {
-    const newTask: Task = {
-      ...task,
-      id: uuidv4(),
-      createdAt: new Date().toISOString(),
-    };
-    onTasksChange([...tasks, newTask]);
-    setShowAddModal(false);
+  const handleAddTask = async (task: Omit<Task, 'id' | 'createdAt'>, files: File[]) => {
+    try {
+      const taskData: any = {
+        title: task.title,
+        description: task.description || '',
+        status: 'todo',
+        priority: task.priority,
+      };
+
+      if (task.assigneeId) {
+        taskData.assigned_to = parseInt(task.assigneeId);
+      }
+      if (task.unitId) {
+        taskData.org_unit = parseInt(task.unitId);
+      } else {
+        throw new Error('Не выбрано подразделение');
+      }
+      if (task.deadline) {
+        taskData.deadline = task.deadline;
+      }
+      if (task.tags && task.tags.length > 0) {
+        taskData.tags = task.tags;
+      }
+
+      const createdTask = await api.createTask(taskData);
+      console.log('✅ Задача создана:', createdTask);
+
+      if (!createdTask || !createdTask.id) {
+        throw new Error('Сервер не вернул ID задачи');
+      }
+
+      const uploadedAttachments: TaskFile[] = [];
+      if (files.length > 0) {
+        for (const file of files) {
+          const uploaded = await api.uploadTaskFile(parseInt(createdTask.id), file, 'attachment');
+          uploadedAttachments.push({
+            id: uploaded.id.toString(),
+            fileName: uploaded.filename || uploaded.fileName || file.name,
+            fileUrl: uploaded.file,
+            uploadedBy: uploaded.uploaded_by,
+            uploadedByName: uploaded.uploaded_by_name,
+            createdAt: uploaded.created_at,
+          });
+        }
+      }
+
+      const newTask: Task = {
+        id: createdTask.id.toString(),
+        title: createdTask.title,
+        description: createdTask.description || '',
+        status: createdTask.status,
+        priority: createdTask.priority,
+        assigneeId: createdTask.assigned_to?.toString() || '',
+        creatorId: createdTask.created_by?.toString() || '',
+        unitId: createdTask.org_unit?.toString() || '',
+        deadline: createdTask.deadline || '',
+        createdAt: createdTask.created_at,
+        tags: createdTask.tags || [],
+        subtasks: [],
+        comments: [],
+        attachments: uploadedAttachments,
+      };
+
+      onTasksChange([...tasks, newTask]);
+      setShowAddModal(false);
+    } catch (error: any) {
+      console.error('Failed to create task:', error);
+      alert(error.message || 'Ошибка при создании задачи.');
+    }
   };
 
   return (
@@ -106,8 +207,8 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
               className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-green-700/30"
             >
               <option value="all">Все подразделения</option>
-              {orgUnits.map(u => (
-                <option key={u.id} value={u.id}>{u.name}</option>
+              {units.map((u: any) => (
+                <option key={u.id} value={u.id.toString()}>{u.name}</option>
               ))}
             </select>
           </div>
@@ -128,14 +229,13 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
         </div>
       )}
 
-      {/* Board */}
       <div className="flex gap-4 overflow-x-auto pb-4">
         {columns.map(col => {
           const colTasks = filteredTasks.filter(t => t.status === col.id);
           return (
             <div
               key={col.id}
-              className="flex-shrink-0 w-72"
+              className="flex-1 min-w-[300px] max-w-[400px]"
               onDragOver={e => e.preventDefault()}
               onDrop={() => handleDrop(col.id)}
             >
@@ -153,6 +253,8 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
                     <TaskCard
                       key={task.id}
                       task={task}
+                      users={users}
+                      units={units}
                       onDragStart={() => handleDragStart(task.id)}
                       onClick={() => setSelectedTask(task)}
                     />
@@ -164,23 +266,41 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
         })}
       </div>
 
-      {/* Add Task Modal */}
       {showAddModal && (
-        <AddTaskModal onClose={() => setShowAddModal(false)} onAdd={handleAddTask} />
+        <AddTaskModal
+          onClose={() => setShowAddModal(false)}
+          onAdd={handleAddTask}
+          users={users}
+          units={units}
+        />
       )}
 
-      {/* Task Detail Modal */}
       {selectedTask && (
         <TaskDetailModal
           task={selectedTask}
+          users={users}
+          units={units}
+          currentUser={user}
           onClose={() => setSelectedTask(null)}
           onUpdate={(updated) => {
             onTasksChange(tasks.map(t => t.id === updated.id ? updated : t));
             setSelectedTask(updated);
           }}
-          onDelete={(id) => {
-            onTasksChange(tasks.filter(t => t.id !== id));
-            setSelectedTask(null);
+          onDelete={async (id) => {
+            try {
+              await api.deleteTask(parseInt(id));
+              onTasksChange(tasks.filter(t => t.id !== id));
+              setSelectedTask(null);
+            } catch (error: any) {
+              console.error('Failed to delete task:', error);
+              if (error.message?.includes('No Task matches')) {
+                // Если задача не найдена на сервере, удаляем её локально
+                onTasksChange(tasks.filter(t => t.id !== id));
+                setSelectedTask(null);
+              } else {
+                alert('Ошибка при удалении задачи');
+              }
+            }
           }}
         />
       )}
@@ -188,13 +308,46 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
   );
 }
 
-function TaskCard({ task, onDragStart, onClick }: { task: Task; onDragStart: () => void; onClick: () => void }) {
-  const assignee = users.find(u => u.id === task.assigneeId);
-  const unit = orgUnits.find(u => u.id === task.unitId);
+// ========== TaskCard Component ==========
+function TaskCard({ task, users, units, onDragStart, onClick }: {
+  task: Task;
+  users: UserType[];
+  units: any[];
+  onDragStart: () => void;
+  onClick: () => void;
+}) {
+  const assignee = users.find(u => u.id.toString() === task.assigneeId);
+  const unit = units.find(u => u.id.toString() === task.unitId);
   const isOverdue = new Date(task.deadline) < new Date() && task.status !== 'done';
   const pConfig = priorityConfig[task.priority];
   const subtasksDone = task.subtasks?.filter(s => s.done).length ?? 0;
   const subtasksTotal = task.subtasks?.length ?? 0;
+  const commentsCount = task.comments?.length || 0;
+  const attachmentsCount = task.attachments?.length || 0;
+
+  const getAssigneeInitials = () => {
+    if (!assignee) return '';
+    const fullName = assignee.fullName || `${assignee.last_name || ''} ${assignee.first_name || ''}`;
+    return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase();
+  };
+
+  const getStatusIcon = () => {
+    if (!task.submission) return null;
+    switch (task.submission.status) {
+      case 'approved': return <CheckCircle size={8} className="text-green-700" />;
+      case 'rejected': return <X size={8} className="text-red-700" />;
+      default: return <Send size={8} className="text-yellow-700" />;
+    }
+  };
+
+  const getStatusText = () => {
+    if (!task.submission) return null;
+    switch (task.submission.status) {
+      case 'approved': return 'Принято';
+      case 'rejected': return 'Отклонено';
+      default: return 'На проверке';
+    }
+  };
 
   return (
     <div
@@ -206,7 +359,7 @@ function TaskCard({ task, onDragStart, onClick }: { task: Task; onDragStart: () 
       <div className="flex items-start gap-2">
         <GripVertical size={14} className="text-slate-300 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 mb-1.5">
+          <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
             <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded', pConfig.bg, pConfig.color)}>
               {pConfig.label}
             </span>
@@ -216,7 +369,23 @@ function TaskCard({ task, onDragStart, onClick }: { task: Task; onDragStart: () 
               </span>
             )}
           </div>
+
           <h4 className="text-sm font-medium text-slate-800 mb-1 line-clamp-2">{task.title}</h4>
+
+          {task.submission && (
+            <div className="mt-1 mb-2">
+              <div className={cn(
+                'text-[9px] px-1.5 py-0.5 rounded-full inline-flex items-center gap-1',
+                task.submission.status === 'approved' ? 'bg-green-100 text-green-700' :
+                task.submission.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                'bg-yellow-100 text-yellow-700'
+              )}>
+                {getStatusIcon()}
+                {getStatusText()}
+              </div>
+            </div>
+          )}
+
           {task.tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-2">
               {task.tags.slice(0, 3).map(tag => (
@@ -226,6 +395,7 @@ function TaskCard({ task, onDragStart, onClick }: { task: Task; onDragStart: () 
               ))}
             </div>
           )}
+
           {subtasksTotal > 0 && (
             <div className="mb-2">
               <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
@@ -240,14 +410,33 @@ function TaskCard({ task, onDragStart, onClick }: { task: Task; onDragStart: () 
               </div>
             </div>
           )}
+
           <div className="flex items-center justify-between mt-2">
             <div className="flex items-center gap-1 text-[10px] text-slate-400">
               <Calendar size={10} />
               <span className={isOverdue ? 'text-red-500 font-medium' : ''}>
-                {new Date(task.deadline).toLocaleDateString('ru-RU')}
+                {new Date(task.deadline).toLocaleString('ru-RU', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}
               </span>
             </div>
+
             <div className="flex items-center gap-1.5">
+              {attachmentsCount > 0 && (
+                <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
+                  <PaperclipIcon size={10} />
+                  {attachmentsCount}
+                </span>
+              )}
+              {commentsCount > 0 && (
+                <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
+                  <MessageCircle size={10} />
+                  {commentsCount}
+                </span>
+              )}
               {unit && (
                 <span className="text-[9px] px-1 py-0.5 bg-slate-100 text-slate-500 rounded">
                   {unit.name}
@@ -256,10 +445,10 @@ function TaskCard({ task, onDragStart, onClick }: { task: Task; onDragStart: () 
               {assignee && (
                 <div
                   className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[8px] font-bold"
-                  style={{ backgroundColor: assignee.avatarColor }}
-                  title={`${assignee.rank} ${assignee.fullName}`}
+                  style={{ backgroundColor: `hsl(${parseInt(assignee.id.toString()) * 100 % 360}, 70%, 50%)` }}
+                  title={`${assignee.rank} ${assignee.fullName || ''}`}
                 >
-                  {assignee.fullName.split(' ').map(n => n[0]).join('')}
+                  {getAssigneeInitials()}
                 </div>
               )}
             </div>
@@ -270,23 +459,468 @@ function TaskCard({ task, onDragStart, onClick }: { task: Task; onDragStart: () 
   );
 }
 
-function TaskDetailModal({ task, onClose, onUpdate, onDelete }: {
+// ========== TaskSubmission Component ==========
+function TaskSubmission({ task, onTaskUpdate }: {
   task: Task;
+  onTaskUpdate: (updatedTask: Task) => void;
+}) {
+  const { user } = useAuth();
+  const [files, setFiles] = useState<File[]>([]);
+  const [comment, setComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewFiles, setReviewFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const reviewFileInputRef = useRef<HTMLInputElement>(null);
+
+  const isAssignee = user?.id.toString() === task.assigneeId;
+  const isCreator = user?.id.toString() === task.creatorId;
+  const isCommanderOrDeputy = user?.role === 'commander' || user?.role === 'deputy_commander';
+  const isUnitHead = user?.role === 'department_head' || user?.role === 'group_head';
+  const isHeadOfTaskUnit = isUnitHead && user?.org_unit?.toString() === task.unitId;
+
+  const canSubmit = isAssignee && task.status === 'in_progress';
+  const canReview = (isCreator || isCommanderOrDeputy || isHeadOfTaskUnit) && task.status === 'review';
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    setFiles(prev => [...prev, ...selectedFiles]);
+  };
+
+  const removeFile = (index: number) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleReviewFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    setReviewFiles(prev => [...prev, ...selectedFiles]);
+  };
+
+  const removeReviewFile = (index: number) => {
+    setReviewFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+
+    if (task.submission && task.submission.status === 'pending') {
+      alert('Задание уже на проверке');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const uploadedFiles: TaskFile[] = [];
+      for (const file of files) {
+        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
+        uploadedFiles.push(uploaded);
+      }
+
+      const submission = await api.submitTask(parseInt(task.id), comment);
+
+      const updatedTask = {
+        ...task,
+        status: 'review' as TaskStatus,
+        submission: {
+          ...submission,
+          files: uploadedFiles,
+          status: 'pending' as const,
+        } as TaskSubmission,
+      };
+
+      onTaskUpdate(updatedTask);
+      setFiles([]);
+      setComment('');
+    } catch (error) {
+      console.error('Failed to submit task:', error);
+      alert('Ошибка при сдаче задания');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!canReview) return;
+
+    if (!task.submission) {
+      alert('Сначала необходимо отправить задание на проверку');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const uploadedFiles: TaskFile[] = [];
+      for (const file of reviewFiles) {
+        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
+        uploadedFiles.push(uploaded);
+      }
+
+      await api.approveTask(parseInt(task.id), reviewComment);
+
+      const updatedTask = {
+        ...task,
+        status: 'done' as TaskStatus,
+        submission: task.submission ? {
+          ...task.submission,
+          status: 'approved' as const,
+          reviewedBy: user?.id.toString(),
+          reviewedAt: new Date().toISOString(),
+          reviewComment,
+          reviewFiles: uploadedFiles,
+        } : undefined,
+      };
+
+      onTaskUpdate(updatedTask);
+      setReviewComment('');
+      setReviewFiles([]);
+    } catch (error) {
+      console.error('Failed to approve task:', error);
+      alert('Ошибка при подтверждении');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!canReview || !reviewComment) {
+      alert('Укажите причину отклонения');
+      return;
+    }
+
+    if (!task.submission) {
+      alert('Сначала необходимо отправить задание на проверку');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const uploadedFiles: TaskFile[] = [];
+      for (const file of reviewFiles) {
+        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
+        uploadedFiles.push(uploaded);
+      }
+
+      await api.rejectTask(parseInt(task.id), reviewComment);
+
+      const updatedTask = {
+        ...task,
+        status: 'in_progress' as TaskStatus,
+        submission: task.submission ? {
+          ...task.submission,
+          status: 'rejected' as const,
+          reviewedBy: user?.id.toString(),
+          reviewedAt: new Date().toISOString(),
+          reviewComment,
+          reviewFiles: uploadedFiles,
+        } : undefined,
+      };
+
+      onTaskUpdate(updatedTask);
+      setReviewComment('');
+      setReviewFiles([]);
+    } catch (error) {
+      console.error('Failed to reject task:', error);
+      alert('Ошибка при отклонении');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const renderFileList = (files: TaskFile[] | File[], onRemove?: (index: number) => void, isEditable = false) => {
+    return (
+      <div className="space-y-2">
+        {files.map((file, index) => {
+          const isTaskFile = 'fileName' in file;
+          const fileName = isTaskFile ? (file.fileName || file.filename || 'Файл') : (file.name || 'Файл');
+          const fileSize = isTaskFile ? undefined : file.size;
+          const fileUrl = isTaskFile ? (file.fileUrl || file.file) : URL.createObjectURL(file);
+          return (
+            <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+              {fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i) ? (
+                <Image size={16} className="text-slate-400" />
+              ) : (
+                <FileText size={16} className="text-slate-400" />
+              )}
+              <span className="text-sm text-slate-600 flex-1 truncate">{fileName}</span>
+              {fileSize && <span className="text-xs text-slate-400">{formatFileSize(fileSize)}</span>}
+              {fileUrl && (
+                <a href={fileUrl} download={fileName} className="p-1 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
+                  <Download size={14} className="text-slate-500" />
+                </a>
+              )}
+              {onRemove && isEditable && (
+                <button
+                  onClick={() => onRemove(index)}
+                  className="p-1 hover:bg-slate-200 rounded"
+                >
+                  <X size={14} className="text-slate-500" />
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-4">
+      <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+        <CheckCircle size={16} className="text-green-700" />
+        Выполнение задания
+      </h3>
+
+      {task.submission && (
+        <div className={cn(
+          'mb-4 p-3 rounded-lg border',
+          task.submission.status === 'approved' ? 'bg-green-50 border-green-200' :
+          task.submission.status === 'rejected' ? 'bg-red-50 border-red-200' :
+          'bg-yellow-50 border-yellow-200'
+        )}>
+          <div className="flex items-center gap-2 mb-2">
+            {task.submission.status === 'approved' ? (
+              <CheckCircle size={16} className="text-green-700" />
+            ) : task.submission.status === 'rejected' ? (
+              <AlertTriangle size={16} className="text-red-700" />
+            ) : (
+              <Send size={16} className="text-yellow-700" />
+            )}
+            <span className="text-sm font-medium">
+              {task.submission.status === 'approved' ? 'Принято' :
+               task.submission.status === 'rejected' ? 'Отклонено' : 'На проверке'}
+            </span>
+          </div>
+
+          {task.submission.comment && (
+            <div className="mt-2">
+              <p className="text-sm text-slate-600">{task.submission.comment}</p>
+            </div>
+          )}
+
+          {task.submission.files && task.submission.files.length > 0 && (
+            <div className="mt-2">
+              <div className="text-xs font-medium text-slate-500 mb-1">Прикреплённые файлы:</div>
+              {renderFileList(task.submission.files)}
+            </div>
+          )}
+
+          {task.submission.reviewComment && (
+            <div className="mt-2 p-2 bg-white rounded text-sm">
+              <span className="font-medium">Комментарий проверяющего:</span>
+              <p className="text-slate-600 mt-1">{task.submission.reviewComment}</p>
+            </div>
+          )}
+
+          {task.submission.reviewFiles && task.submission.reviewFiles.length > 0 && (
+            <div className="mt-2">
+              <div className="text-xs font-medium text-slate-500 mb-1">Файлы проверяющего:</div>
+              {renderFileList(task.submission.reviewFiles)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {canSubmit && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-slate-600">Прикрепить файлы к выполнению</label>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
+              >
+                <Upload size={14} />
+                Выбрать файлы
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+                className="hidden"
+                multiple
+              />
+            </div>
+            {files.length > 0 && (
+              <div className="mt-2">
+                {renderFileList(files, removeFile, true)}
+              </div>
+            )}
+          </div>
+
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Добавьте комментарий к выполненному заданию..."
+            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+            rows={3}
+          />
+
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || files.length === 0}
+            className="w-full py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {submitting ? 'Отправка...' : (
+              <>
+                <Send size={16} />
+                Отправить на проверку
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {canReview && task.status === 'review' && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-slate-600">Прикрепить файлы (необязательно)</label>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => reviewFileInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
+              >
+                <Upload size={14} />
+                Выбрать файлы
+              </button>
+              <input
+                type="file"
+                ref={reviewFileInputRef}
+                onChange={handleReviewFileSelect}
+                className="hidden"
+                multiple
+              />
+            </div>
+            {reviewFiles.length > 0 && (
+              <div className="mt-2">
+                {renderFileList(reviewFiles, removeReviewFile, true)}
+              </div>
+            )}
+          </div>
+
+          <textarea
+            value={reviewComment}
+            onChange={(e) => setReviewComment(e.target.value)}
+            placeholder="Комментарий к проверке..."
+            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+            rows={3}
+          />
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleApprove}
+              disabled={submitting}
+              className="flex-1 py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              <CheckCircle size={16} />
+              Принять
+            </button>
+            <button
+              onClick={handleReject}
+              disabled={submitting}
+              className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              <X size={16} />
+              Отклонить
+            </button>
+          </div>
+        </div>
+      )}
+
+      {task.status !== 'in_progress' && task.status !== 'review' && !task.submission && (
+        <p className="text-sm text-slate-500 italic">
+          Задача ещё не в работе или уже выполнена.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ========== TaskDetailModal Component ==========
+function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, onDelete }: {
+  task: Task;
+  users: UserType[];
+  units: any[];
+  currentUser: any;
   onClose: () => void;
   onUpdate: (t: Task) => void;
   onDelete: (id: string) => void;
 }) {
-  const assignee = users.find(u => u.id === task.assigneeId);
-  const creator = users.find(u => u.id === task.creatorId);
-  const unit = orgUnits.find(u => u.id === task.unitId);
-  const pConfig = priorityConfig[task.priority];
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'submission' | 'attachments'>('details');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [comments, setComments] = useState<Comment[]>(task.comments || []);
+
+  const assignee = users.find(u => u.id.toString() === task.assigneeId);
+  const creator = users.find(u => u.id.toString() === task.creatorId);
+  const unit = units.find(u => u.id.toString() === task.unitId);
+  const pConfig = priorityConfig[task.priority];
+
+  const handleAddComment = (newComment: Comment) => {
+    const updatedComments = [...comments, newComment];
+    setComments(updatedComments);
+    onUpdate({ ...task, comments: updatedComments });
+  };
+
+  const handleDeleteComment = (commentId: string) => {
+    const updatedComments = comments.filter(c => c.id !== commentId);
+    setComments(updatedComments);
+    onUpdate({ ...task, comments: updatedComments });
+  };
+
+  const handleEditComment = (commentId: string, newText: string) => {
+    const updatedComments = comments.map(c =>
+      c.id === commentId ? { ...c, text: newText } : c
+    );
+    setComments(updatedComments);
+    onUpdate({ ...task, comments: updatedComments });
+  };
+
+  const getAssigneeFullName = (user: any) => {
+    return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim();
+  };
+
+  const getAssigneeInitials = (user: any) => {
+    const fullName = getAssigneeFullName(user);
+    return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase();
+  };
+
+  const renderFileList = (files: TaskFile[]) => {
+    if (!files || files.length === 0) return <p className="text-sm text-slate-500">Нет вложений</p>;
+    return (
+      <div className="space-y-2">
+        {files.map(file => {
+          const fileName = file.fileName || file.filename || 'Файл';
+          const fileUrl = file.fileUrl || file.file;
+          return (
+            <div key={file.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+              {fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i) ? (
+                <Image size={16} className="text-slate-400" />
+              ) : (
+                <FileText size={16} className="text-slate-400" />
+              )}
+              <span className="text-sm text-slate-600 flex-1 truncate">{fileName}</span>
+              {fileUrl && (
+                <a href={fileUrl} download={fileName} className="p-1 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
+                  <Download size={14} className="text-slate-500" />
+                </a>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="p-6">
-          <div className="flex items-start justify-between mb-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-6 pb-2 border-b border-slate-200">
+          <div className="flex items-start justify-between">
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <span className={cn('text-xs font-medium px-2 py-0.5 rounded', pConfig.bg, pConfig.color)}>
@@ -301,113 +935,225 @@ function TaskDetailModal({ task, onClose, onUpdate, onDelete }: {
             </button>
           </div>
 
-          <p className="text-sm text-slate-600 mb-4">{task.description}</p>
-
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Исполнитель</div>
-              <div className="flex items-center gap-2">
-                {assignee && (
-                  <>
-                    <div
-                      className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
-                      style={{ backgroundColor: assignee.avatarColor }}
-                    >
-                      {assignee.fullName.split(' ').map(n => n[0]).join('')}
-                    </div>
-                    <span className="text-sm text-slate-700">{assignee.rank} {assignee.fullName}</span>
-                  </>
-                )}
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Постановщик</div>
-              <div className="flex items-center gap-2">
-                {creator && (
-                  <>
-                    <div
-                      className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
-                      style={{ backgroundColor: creator.avatarColor }}
-                    >
-                      {creator.fullName.split(' ').map(n => n[0]).join('')}
-                    </div>
-                    <span className="text-sm text-slate-700">{creator.rank} {creator.fullName}</span>
-                  </>
-                )}
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Подразделение</div>
-              <span className="text-sm text-slate-700">{unit?.name}</span>
-            </div>
-            <div>
-              <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Дедлайн</div>
-              <span className="text-sm text-slate-700 flex items-center gap-1">
-                <Calendar size={12} />
-                {new Date(task.deadline).toLocaleDateString('ru-RU')}
-              </span>
-            </div>
+          <div className="flex gap-4 mt-4">
+            <button
+              onClick={() => setActiveTab('details')}
+              className={cn(
+                'pb-2 text-sm font-medium transition-colors relative',
+                activeTab === 'details'
+                  ? 'text-green-700 border-b-2 border-green-700'
+                  : 'text-slate-500 hover:text-slate-700'
+              )}
+            >
+              Детали
+            </button>
+            <button
+              onClick={() => setActiveTab('comments')}
+              className={cn(
+                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1',
+                activeTab === 'comments'
+                  ? 'text-green-700 border-b-2 border-green-700'
+                  : 'text-slate-500 hover:text-slate-700'
+              )}
+            >
+              Обсуждение
+              {comments.length > 0 && (
+                <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full ml-1">
+                  {comments.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab('attachments')}
+              className={cn(
+                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1',
+                activeTab === 'attachments'
+                  ? 'text-green-700 border-b-2 border-green-700'
+                  : 'text-slate-500 hover:text-slate-700'
+              )}
+            >
+              <PaperclipIcon size={16} />
+              Вложения
+              {task.attachments && task.attachments.length > 0 && (
+                <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full ml-1">
+                  {task.attachments.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab('submission')}
+              className={cn(
+                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1',
+                activeTab === 'submission'
+                  ? 'text-green-700 border-b-2 border-green-700'
+                  : 'text-slate-500 hover:text-slate-700'
+              )}
+            >
+              <CheckCircle size={16} />
+              Выполнение
+              {task.submission && (
+                <span className={cn(
+                  'text-xs px-1.5 py-0.5 rounded-full ml-1',
+                  task.submission.status === 'approved' ? 'bg-green-100 text-green-700' :
+                  task.submission.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                  'bg-yellow-100 text-yellow-700'
+                )}>
+                  {task.submission.status === 'approved' ? '✓' :
+                   task.submission.status === 'rejected' ? '✗' : '?'}
+                </span>
+              )}
+            </button>
           </div>
+        </div>
 
-          {task.tags.length > 0 && (
-            <div className="mb-4">
-              <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Метки</div>
-              <div className="flex flex-wrap gap-1">
-                {task.tags.map(tag => (
-                  <span key={tag} className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">{tag}</span>
-                ))}
+        <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === 'details' && (
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">{task.description}</p>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Исполнитель</div>
+                  <div className="flex items-center gap-2">
+                    {assignee ? (
+                      <>
+                        <div
+                          className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
+                          style={{ backgroundColor: `hsl(${parseInt(assignee.id.toString()) * 100 % 360}, 70%, 50%)` }}
+                        >
+                          {getAssigneeInitials(assignee)}
+                        </div>
+                        <span className="text-sm text-slate-700">{assignee.rank} {getAssigneeFullName(assignee)}</span>
+                      </>
+                    ) : (
+                      <span className="text-sm text-slate-500">Не назначен</span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Постановщик</div>
+                  <div className="flex items-center gap-2">
+                    {creator && (
+                      <>
+                        <div
+                          className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
+                          style={{ backgroundColor: `hsl(${parseInt(creator.id.toString()) * 100 % 360}, 70%, 50%)` }}
+                        >
+                          {getAssigneeInitials(creator)}
+                        </div>
+                        <span className="text-sm text-slate-700">{creator.rank} {getAssigneeFullName(creator)}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Подразделение</div>
+                  <span className="text-sm text-slate-700">{unit?.name || '—'}</span>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Дедлайн</div>
+                  <span className="text-sm text-slate-700 flex items-center gap-1">
+                    <Calendar size={12} />
+                    {new Date(task.deadline).toLocaleString('ru-RU', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              {task.tags.length > 0 && (
+                <div>
+                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Метки</div>
+                  <div className="flex flex-wrap gap-1">
+                    {task.tags.map(tag => (
+                      <span key={tag} className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {task.subtasks && task.subtasks.length > 0 && (
+                <div>
+                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Подзадачи</div>
+                  <div className="space-y-1.5">
+                    {task.subtasks.map(st => (
+                      <label key={st.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={st.done}
+                          onChange={() => {
+                            const updated = {
+                              ...task,
+                              subtasks: task.subtasks!.map(s => s.id === st.id ? { ...s, done: !s.done } : s),
+                            };
+                            onUpdate(updated);
+                          }}
+                          className="rounded border-slate-300 text-green-700 focus:ring-green-700"
+                        />
+                        <span className={cn('text-sm', st.done ? 'line-through text-slate-400' : 'text-slate-700')}>{st.title}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Статус</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {columns.map(col => (
+                    <button
+                      key={col.id}
+                      onClick={() => onUpdate({ ...task, status: col.id })}
+                      className={cn(
+                        'text-xs px-2.5 py-1 rounded-lg border transition-colors',
+                        task.status === col.id
+                          ? 'border-green-700 bg-green-50 text-green-700 font-medium'
+                          : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                      )}
+                    >
+                      {col.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
 
-          {/* Subtasks */}
-          {task.subtasks && task.subtasks.length > 0 && (
-            <div className="mb-4">
-              <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Подзадачи</div>
-              <div className="space-y-1.5">
-                {task.subtasks.map(st => (
-                  <label key={st.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={st.done}
-                      onChange={() => {
-                        const updated = {
-                          ...task,
-                          subtasks: task.subtasks!.map(s => s.id === st.id ? { ...s, done: !s.done } : s),
-                        };
-                        onUpdate(updated);
-                      }}
-                      className="rounded border-slate-300 text-green-700 focus:ring-green-700"
-                    />
-                    <span className={cn('text-sm', st.done ? 'line-through text-slate-400' : 'text-slate-700')}>{st.title}</span>
-                  </label>
-                ))}
-              </div>
+          {activeTab === 'comments' && (
+            <TaskComments
+              taskId={task.id}
+              comments={comments}
+              currentUser={currentUser}
+              onAddComment={handleAddComment}
+              onDeleteComment={handleDeleteComment}
+              onEditComment={handleEditComment}
+            />
+          )}
+
+          {activeTab === 'attachments' && (
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium text-slate-700">Вложения задачи</h3>
+              {renderFileList(task.attachments || [])}
             </div>
           )}
 
-          {/* Status Change */}
-          <div className="mb-4">
-            <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Статус</div>
-            <div className="flex flex-wrap gap-1.5">
-              {columns.map(col => (
-                <button
-                  key={col.id}
-                  onClick={() => onUpdate({ ...task, status: col.id })}
-                  className={cn(
-                    'text-xs px-2.5 py-1 rounded-lg border transition-colors',
-                    task.status === col.id
-                      ? 'border-green-700 bg-green-50 text-green-700 font-medium'
-                      : 'border-slate-200 text-slate-500 hover:bg-slate-50'
-                  )}
-                >
-                  {col.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          {activeTab === 'submission' && (
+            <TaskSubmission
+              task={task}
+              onTaskUpdate={onUpdate}
+            />
+          )}
+        </div>
 
-          <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+        <div className="p-6 pt-4 border-t border-slate-100">
+          <div className="flex items-center justify-between">
             <div className="text-[10px] text-slate-400">
               Создано: {new Date(task.createdAt).toLocaleDateString('ru-RU')}
             </div>
@@ -442,32 +1188,385 @@ function TaskDetailModal({ task, onClose, onUpdate, onDelete }: {
   );
 }
 
-function AddTaskModal({ onClose, onAdd }: { onClose: () => void; onAdd: (t: Omit<Task, 'id' | 'createdAt'>) => void }) {
-  const today = new Date().toISOString().split('T')[0];
-  
+// ========== TaskComments Component ==========
+function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteComment, onEditComment }: {
+  taskId: string;
+  comments: Comment[];
+  currentUser: any;
+  onAddComment: (comment: Comment) => void;
+  onDeleteComment: (id: string) => void;
+  onEditComment: (id: string, newText: string) => void;
+}) {
+  const [newComment, setNewComment] = useState('');
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const commentsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [comments]);
+
+  const handleSendComment = () => {
+    if (!newComment.trim() && attachments.length === 0) return;
+
+    const newCommentObj: Comment = {
+      id: uuidv4(),
+      taskId,
+      userId: currentUser?.id.toString() || '',
+      userFullName: currentUser?.fullName || currentUser?.full_name || '',
+      userRank: currentUser?.rank || '',
+      text: newComment,
+      createdAt: new Date().toISOString(),
+      attachments: attachments.map(f => ({
+        id: uuidv4(),
+        url: URL.createObjectURL(f),
+        name: f.name,
+        type: f.type,
+      })),
+    };
+
+    onAddComment(newCommentObj);
+    setNewComment('');
+    setAttachments([]);
+    setShowAttachmentMenu(false);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setAttachments(prev => [...prev, ...files]);
+    setShowAttachmentMenu(false);
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendComment();
+    }
+  };
+
+  const startEditing = (comment: Comment) => {
+    setEditingCommentId(comment.id);
+    setEditText(comment.text);
+  };
+
+  const saveEdit = () => {
+    if (editingCommentId && editText.trim()) {
+      onEditComment(editingCommentId, editText);
+      setEditingCommentId(null);
+      setEditText('');
+    }
+  };
+
+  const cancelEdit = () => {
+    setEditingCommentId(null);
+    setEditText('');
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const renderFileList = (files: { id: string; url: string; name: string; type?: string }[]) => {
+    return (
+      <div className="mt-2 flex flex-wrap gap-2">
+        {files.map((att) => (
+          <div key={att.id} className="flex items-center gap-1 bg-slate-50 rounded-lg px-2 py-1 border border-slate-200">
+            {att.type?.startsWith('image/') ? (
+              <Image size={12} className="text-slate-400" />
+            ) : (
+              <FileText size={12} className="text-slate-400" />
+            )}
+            <span className="text-xs text-slate-600 max-w-[100px] truncate">{att.name}</span>
+            <a
+              href={att.url}
+              download={att.name}
+              className="ml-1 p-0.5 hover:bg-slate-200 rounded"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Download size={10} className="text-slate-500" />
+            </a>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+        {comments.map((comment) => (
+          <div key={comment.id} className="group relative">
+            <div className="flex gap-3">
+              <div className="flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
+                  {comment.userFullName.split(' ').map((n: string) => n[0]).join('')}
+                </div>
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-sm font-medium text-slate-800">
+                    {comment.userRank} {comment.userFullName}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {formatDate(comment.createdAt)}
+                  </span>
+                </div>
+
+                {editingCommentId === comment.id ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                      rows={2}
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={saveEdit}
+                        className="text-xs px-2 py-1 bg-green-700 text-white rounded hover:bg-green-800"
+                      >
+                        Сохранить
+                      </button>
+                      <button
+                        onClick={cancelEdit}
+                        className="text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{comment.text}</p>
+                    {comment.attachments && comment.attachments.length > 0 && renderFileList(comment.attachments)}
+                  </>
+                )}
+              </div>
+
+              {comment.userId === currentUser?.id.toString() && !editingCommentId && (
+                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                  <button
+                    onClick={() => startEditing(comment)}
+                    className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                    title="Редактировать"
+                  >
+                    <Edit2 size={12} />
+                  </button>
+                  <button
+                    onClick={() => onDeleteComment(comment.id)}
+                    className="p-1 text-slate-400 hover:text-red-600 rounded"
+                    title="Удалить"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        <div ref={commentsEndRef} />
+      </div>
+
+      <div className="relative">
+        {attachments.length > 0 && (
+          <div className="mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <div className="text-xs font-medium text-slate-600 mb-2 flex items-center gap-2">
+              <Paperclip size={12} />
+              Прикреплённые файлы к комментарию:
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((file, index) => (
+                <div key={index} className="flex items-center gap-1 bg-white rounded-lg px-2 py-1 border border-slate-200 shadow-sm">
+                  {file.type.startsWith('image/') ? (
+                    <Image size={12} className="text-slate-400" />
+                  ) : (
+                    <FileText size={12} className="text-slate-400" />
+                  )}
+                  <span className="text-xs text-slate-600 max-w-[150px] truncate">{file.name}</span>
+                  <button
+                    onClick={() => removeAttachment(index)}
+                    className="ml-1 p-0.5 hover:bg-slate-100 rounded"
+                  >
+                    <X size={10} className="text-slate-500" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-end gap-2">
+          <textarea
+            value={newComment}
+            onChange={(e) => setNewComment(e.target.value)}
+            onKeyDown={handleKeyPress}
+            placeholder="Напишите комментарий..."
+            className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30 resize-none min-h-[80px]"
+          />
+
+          <div className="flex flex-col gap-1">
+            <div className="relative">
+              <button
+                onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
+                className="p-2 text-slate-400 hover:text-green-700 hover:bg-slate-50 rounded-lg transition-colors"
+                title="Прикрепить файл"
+              >
+                <Paperclip size={18} />
+              </button>
+
+              {showAttachmentMenu && (
+                <div className="absolute bottom-full right-0 mb-1 bg-white rounded-lg shadow-lg border border-slate-200 py-1 min-w-[150px] z-10">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full px-3 py-2 text-sm text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                  >
+                    <FileText size={14} />
+                    Документ
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (fileInputRef.current) {
+                        fileInputRef.current.accept = 'image/*';
+                        fileInputRef.current.click();
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-sm text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                  >
+                    <Image size={14} />
+                    Изображение
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={handleSendComment}
+              disabled={!newComment.trim() && attachments.length === 0}
+              className="p-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Отправить"
+            >
+              <Send size={18} />
+            </button>
+          </div>
+        </div>
+
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          className="hidden"
+          multiple
+        />
+      </div>
+
+      <div className="text-[10px] text-slate-400">
+        Enter для отправки • Shift+Enter для новой строки
+      </div>
+    </div>
+  );
+}
+
+// ========== AddTaskModal Component ==========
+function AddTaskModal({ onClose, onAdd, users, units }: {
+  onClose: () => void;
+  onAdd: (task: Omit<Task, 'id' | 'createdAt'>, files: File[]) => Promise<void>;
+  users: UserType[];
+  units: any[];
+}) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const defaultDeadline = `${year}-${month}-${day}T${hours}:${minutes}`;
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<Priority>('medium');
-  const [status, setStatus] = useState<TaskStatus>('backlog');
-  const [assigneeId, setAssigneeId] = useState(users[0].id);
-  const [unitId, setUnitId] = useState(orgUnits[0].id);
-  const [deadline, setDeadline] = useState(today);
+  const [selectedUnitId, setSelectedUnitId] = useState('');
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [deadline, setDeadline] = useState(defaultDeadline);
   const [tagsInput, setTagsInput] = useState('');
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const filteredUsers = selectedUnitId
+    ? users.filter(u => u.org_unit?.toString() === selectedUnitId)
+    : [];
+
+  const handleUnitChange = (unitId: string) => {
+    setSelectedUnitId(unitId);
+    setSelectedUserId('');
+  };
+
+  const handleUserChange = (userId: string) => {
+    setSelectedUserId(userId);
+    const user = users.find(u => u.id.toString() === userId);
+    if (user?.org_unit) {
+      setSelectedUnitId(user.org_unit.toString());
+    }
+  };
+
+  const handleAttachmentSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setAttachmentFiles(prev => [...prev, ...files]);
+  };
+
+  const removeAttachmentFile = (index: number) => {
+    setAttachmentFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
-    onAdd({
-      title,
-      description,
-      priority,
-      status,
-      assigneeId,
-      creatorId: 'u1',
-      unitId,
-      deadline,
-      tags: tagsInput.split(',').map(t => t.trim()).filter(Boolean),
-    });
+    if (!title.trim() || !selectedUnitId) return;
+
+    setSubmitting(true);
+    try {
+      await onAdd({
+        title,
+        description,
+        priority,
+        status: 'todo',
+        assigneeId: selectedUserId,
+        creatorId: '',
+        unitId: selectedUnitId,
+        deadline,
+        tags: tagsInput.split(',').map(t => t.trim()).filter(Boolean),
+        subtasks: [],
+      }, attachmentFiles);
+    } catch (error) {
+      console.error('Failed to create task:', error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const getAssigneeFullName = (user: any) => {
+    return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim();
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
   return (
@@ -493,6 +1592,7 @@ function AddTaskModal({ onClose, onAdd }: { onClose: () => void; onAdd: (t: Omit
                 required
               />
             </div>
+
             <div>
               <label className="text-xs font-medium text-slate-600 mb-1 block">Описание</label>
               <textarea
@@ -503,53 +1603,105 @@ function AddTaskModal({ onClose, onAdd }: { onClose: () => void; onAdd: (t: Omit
                 placeholder="Описание задачи"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-medium text-slate-600 mb-1 block">Приоритет</label>
-                <select value={priority} onChange={e => setPriority(e.target.value as Priority)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
-                  <option value="critical">Критический</option>
-                  <option value="high">Высокий</option>
-                  <option value="medium">Средний</option>
-                  <option value="low">Низкий</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-600 mb-1 block">Статус</label>
-                <select value={status} onChange={e => setStatus(e.target.value as TaskStatus)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
-                  {columns.map(c => (
-                    <option key={c.id} value={c.id}>{c.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-medium text-slate-600 mb-1 block">Исполнитель</label>
-                <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
-                  {users.map(u => (
-                    <option key={u.id} value={u.id}>{u.rank} {u.fullName}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-600 mb-1 block">Подразделение</label>
-                <select value={unitId} onChange={e => setUnitId(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
-                  {orgUnits.map(u => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Дедлайн</label>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Приоритет</label>
+              <select value={priority} onChange={e => setPriority(e.target.value as Priority)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
+                <option value="critical">Критический</option>
+                <option value="high">Высокий</option>
+                <option value="medium">Средний</option>
+                <option value="low">Низкий</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Подразделение *</label>
+              <select
+                value={selectedUnitId}
+                onChange={e => handleUnitChange(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                required
+              >
+                <option value="">Выберите подразделение</option>
+                {units.map((u: any) => (
+                  <option key={u.id} value={u.id.toString()}>{u.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Исполнитель (необязательно)</label>
+              <select
+                value={selectedUserId}
+                onChange={e => handleUserChange(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                disabled={!selectedUnitId}
+              >
+                <option value="">Не назначен (задача на подразделение)</option>
+                {filteredUsers.map(u => (
+                  <option key={u.id} value={u.id.toString()}>
+                    {u.rank} {getAssigneeFullName(u)}
+                  </option>
+                ))}
+              </select>
+              {selectedUnitId && filteredUsers.length === 0 && (
+                <p className="text-xs text-amber-600 mt-1">В этом подразделении нет сотрудников</p>
+              )}
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Вложения (файлы любых форматов)</label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('task-attachments')?.click()}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
+                >
+                  <Upload size={14} />
+                  Выбрать файлы
+                </button>
+                <input
+                  id="task-attachments"
+                  type="file"
+                  onChange={handleAttachmentSelect}
+                  className="hidden"
+                  multiple
+                />
+              </div>
+              {attachmentFiles.length > 0 && (
+                <div className="mt-2 space-y-2">
+                  {attachmentFiles.map((file, index) => (
+                    <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                      {file.type?.startsWith('image/') ? (
+                        <Image size={16} className="text-slate-400" />
+                      ) : (
+                        <FileText size={16} className="text-slate-400" />
+                      )}
+                      <span className="text-sm text-slate-600 flex-1 truncate">{file.name}</span>
+                      <span className="text-xs text-slate-400">{formatFileSize(file.size)}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachmentFile(index)}
+                        className="p-1 hover:bg-slate-200 rounded"
+                      >
+                        <X size={14} className="text-slate-500" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-slate-600 mb-1 block">Дедлайн (дата и время)</label>
               <input
-                type="date"
+                type="datetime-local"
                 value={deadline}
-                min={today}
                 onChange={e => setDeadline(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30 focus:border-green-700"
               />
             </div>
+
             <div>
               <label className="text-xs font-medium text-slate-600 mb-1 block">Метки (через запятую)</label>
               <input
@@ -566,8 +1718,12 @@ function AddTaskModal({ onClose, onAdd }: { onClose: () => void; onAdd: (t: Omit
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">
               Отмена
             </button>
-            <button type="submit" className="px-4 py-2 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800">
-              Создать
+            <button
+              type="submit"
+              disabled={submitting}
+              className="px-4 py-2 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 flex items-center gap-2"
+            >
+              {submitting ? 'Создание...' : 'Создать'}
             </button>
           </div>
         </form>

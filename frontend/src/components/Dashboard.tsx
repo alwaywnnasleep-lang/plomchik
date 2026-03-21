@@ -18,7 +18,9 @@ export function Dashboard({ tasks }: DashboardProps) {
   const loadUsers = async () => {
     try {
       const usersData = await api.getUsers();
-      setUsers(usersData);
+      // Обработка пагинированного ответа
+      const usersList = Array.isArray(usersData) ? usersData : (usersData.results || []);
+      setUsers(usersList);
     } catch (error) {
       console.error('Failed to load users:', error);
     } finally {
@@ -49,7 +51,7 @@ export function Dashboard({ tasks }: DashboardProps) {
   };
 
   const statusLabels: Record<string, string> = {
-    backlog: 'Запланировано',
+    planned: 'Запланировано',
     todo: 'К выполнению',
     in_progress: 'В работе',
     review: 'На проверке',

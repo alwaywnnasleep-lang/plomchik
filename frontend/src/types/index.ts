@@ -1,5 +1,5 @@
 export type Priority = 'critical' | 'high' | 'medium' | 'low';
-export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'review' | 'done';
+export type TaskStatus = 'planned' | 'todo' | 'in_progress' | 'review' | 'done';
 export type NotificationType = 'task_assigned' | 'deadline_approaching' | 'task_completed' | 'structure_changed' | 'comment';
 
 export interface User {
@@ -11,6 +11,7 @@ export interface User {
   rank: string;
   position: string;
   unitId?: string;
+  org_unit?: string | number | null;
   avatarColor?: string;
   role?: string;
   clearance_level?: number;
@@ -27,6 +28,54 @@ export interface OrgUnit {
   children?: OrgUnit[];
 }
 
+export interface Comment {
+  id: string;
+  taskId: string;
+  userId: string;
+  userFullName: string;
+  userRank: string;
+  text: string;
+  createdAt: string;
+  attachments?: {
+    id: string;
+    url: string;
+    name: string;
+    type?: string;
+  }[];
+}
+
+export interface TaskFile {
+  id: string;
+  fileName: string;
+  fileUrl: string;
+  taskId?: string;
+  userId?: string;
+  userFullName?: string;
+  fileSize?: number;
+  fileType?: 'attachment' | 'submission';
+  uploadedAt?: string;
+  uploadedBy?: string;
+  uploadedByName?: string;
+  createdAt?: string;
+  file?: string;      // для совместимости с сырыми данными
+  filename?: string;  // для совместимости
+}
+
+export interface TaskSubmission {
+  id: string;
+  status: 'pending' | 'approved' | 'rejected';
+  comment?: string;
+  submittedAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewComment?: string;
+  files?: TaskFile[];
+  reviewFiles?: TaskFile[];
+  taskId?: string;
+  userId?: string;
+  userFullName?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -40,6 +89,9 @@ export interface Task {
   createdAt: string;
   tags: string[];
   subtasks?: { id: string; title: string; done: boolean }[];
+  comments?: Comment[];
+  attachments?: TaskFile[];
+  submission?: TaskSubmission;
 }
 
 export interface Notification {

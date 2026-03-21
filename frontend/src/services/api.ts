@@ -44,7 +44,6 @@ class ApiService {
     const url = `${API_BASE_URL}${endpoint}`;
     const token = this.getToken();
 
-    // Создаем объект headers с правильной типизацией
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string> || {}),
@@ -73,8 +72,13 @@ class ApiService {
       }
 
       if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `API Error: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Server error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          data: errorData
+        });
+        throw new Error(errorData.detail || errorData.message || JSON.stringify(errorData) || `API Error: ${response.status}`);
       }
 
       return response.json();
@@ -123,23 +127,25 @@ class ApiService {
   getUsers() {
     return this.request('/users/');
   }
-  async getAllUsers() {
-  let page = 1;
-  let allUsers: any[] = [];
-  let hasNext = true;
 
-  while (hasNext) {
-    const response = await this.request(`/users/?page=${page}`);
-    if (response.results) {
-      allUsers = [...allUsers, ...response.results];
-      hasNext = !!response.next;
-      page++;
-    } else {
-      hasNext = false;
+  async getAllUsers() {
+    let page = 1;
+    let allUsers: any[] = [];
+    let hasNext = true;
+
+    while (hasNext) {
+      const response = await this.request(`/users/?page=${page}`);
+      if (response.results) {
+        allUsers = [...allUsers, ...response.results];
+        hasNext = !!response.next;
+        page++;
+      } else {
+        hasNext = false;
+      }
     }
+    return allUsers;
   }
-  return allUsers;
-}
+
   getCurrentUser() {
     return this.request('/users/me/');
   }
@@ -158,12 +164,14 @@ class ApiService {
       }),
     });
   }
+
   updateUser(id: number, data: any) {
-  return this.request(`/users/${id}/`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  });
-}
+    return this.request(`/users/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
   // ========== Задачи ==========
   getTasks(params?: Record<string, string>) {
     const query = params ? '?' + new URLSearchParams(params) : '';
@@ -209,21 +217,86 @@ class ApiService {
     return this.request('/tasks/dashboard/');
   }
 
-  uploadTaskAttachment(taskId: number, file: File) {
+  // ========== Файлы задания ==========
+  uploadTaskFile(taskId: number, file: File, fileType: 'attachment' | 'submission') {
     const formData = new FormData();
     formData.append('file', file);
-    
-    return fetch(`${API_BASE_URL}/tasks/${taskId}/attachments/`, {
+    let endpoint = '';
+    if (fileType === 'attachment') {
+      endpoint = `/tasks/${taskId}/attachments/`;
+    } else {
+      endpoint = `/tasks/${taskId}/submission-attachments/`;
+    }
+    return fetch(`${API_BASE_URL}${endpoint}`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${this.getToken()}`,
       },
       body: formData,
-    }).then(res => res.json());
+    }).then(res => {
+      if (!res.ok) {
+        return res.text().then(text => { throw new Error(text); });
+      }
+      return res.json();
+    });
   }
 
-  getTaskAttachments(taskId: number) {
+  getTaskFiles(taskId: number) {
     return this.request(`/tasks/${taskId}/attachments/`);
+  }
+
+  deleteTaskFile(fileId: number) {
+    return this.request(`/tasks/attachments/${fileId}/`, {
+      method: 'DELETE',
+    });
+  }
+
+  // ========== Выполнение задания ==========
+  submitTask(taskId: number, comment?: string) {
+    return this.request(`/tasks/${taskId}/submit/`, {
+      method: 'POST',
+      body: JSON.stringify({ comment }),
+    });
+  }
+
+  approveTask(taskId: number, comment?: string) {
+    return this.request(`/tasks/${taskId}/approve/`, {
+      method: 'POST',
+      body: JSON.stringify({ comment }),
+    });
+  }
+
+  rejectTask(taskId: number, comment: string) {
+    return this.request(`/tasks/${taskId}/reject/`, {
+      method: 'POST',
+      body: JSON.stringify({ comment }),
+    });
+  }
+
+  // ========== Комментарии к задачам ==========
+  getTaskComments(taskId: number) {
+    return this.request(`/tasks/${taskId}/comments/`);
+  }
+
+  addTaskComment(taskId: number, text: string, attachments?: File[]) {
+    // Пока не поддерживаем файлы в комментариях (будет отдельный эндпоинт)
+    return this.request(`/tasks/${taskId}/comments/`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  updateTaskComment(commentId: number, text: string) {
+    return this.request(`/tasks/comments/${commentId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  deleteTaskComment(commentId: number) {
+    return this.request(`/tasks/comments/${commentId}/`, {
+      method: 'DELETE',
+    });
   }
 
   // ========== Оргструктура ==========

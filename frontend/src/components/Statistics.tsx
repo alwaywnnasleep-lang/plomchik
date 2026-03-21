@@ -1,20 +1,19 @@
 import { useState, useMemo } from 'react';
 import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
   PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer 
 } from 'recharts';
 import { Calendar, Filter, Download, TrendingUp, Users, CheckCircle, Clock } from 'lucide-react';
-import type { Task } from '@/types';
-import { users, orgUnits } from '@/data/mockData';
-import { cn } from '@/utils/cn';
+import type { Task, OrgUnit } from '@/types';
 
 interface StatisticsProps {
   tasks: Task[];
+  units?: OrgUnit[]; // список подразделений для отображения названий
 }
 
 const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
 
-export function Statistics({ tasks }: StatisticsProps) {
+export function Statistics({ tasks, units = [] }: StatisticsProps) {
   const [dateRange, setDateRange] = useState<'week' | 'month' | 'quarter' | 'year'>('month');
   const [selectedUnit, setSelectedUnit] = useState<string>('all');
   const [selectedPriority, setSelectedPriority] = useState<string>('all');
@@ -30,21 +29,27 @@ export function Statistics({ tasks }: StatisticsProps) {
 
   // Статистика по статусам
   const statusStats = useMemo(() => {
-    const stats = {
-      backlog: 0,
+    const stats: Record<string, number> = {
+      planned: 0,
       todo: 0,
       in_progress: 0,
       review: 0,
       done: 0,
     };
     filteredTasks.forEach(task => {
-      stats[task.status] = (stats[task.status] || 0) + 1;
+      const status = task.status;
+      if (status in stats) {
+        stats[status] += 1;
+      } else {
+        // если неизвестный статус, добавляем в planned для простоты
+        stats.planned += 1;
+      }
     });
-    return Object.entries(stats).map(([name, value]) => ({
-      name: name === 'backlog' ? 'Запланировано' :
-            name === 'todo' ? 'К выполнению' :
-            name === 'in_progress' ? 'В работе' :
-            name === 'review' ? 'На проверке' : 'Выполнено',
+    return Object.entries(stats).map(([status, value]) => ({
+      name: status === 'planned' ? 'Запланировано' :
+            status === 'todo' ? 'К выполнению' :
+            status === 'in_progress' ? 'В работе' :
+            status === 'review' ? 'На проверке' : 'Выполнено',
       value
     }));
   }, [filteredTasks]);
@@ -58,27 +63,35 @@ export function Statistics({ tasks }: StatisticsProps) {
       low: 0,
     };
     filteredTasks.forEach(task => {
-      stats[task.priority] = (stats[task.priority] || 0) + 1;
+      if (task.priority in stats) {
+        stats[task.priority as keyof typeof stats] += 1;
+      }
     });
-    return Object.entries(stats).map(([name, value]) => ({
-      name: name === 'critical' ? 'Критический' :
-            name === 'high' ? 'Высокий' :
-            name === 'medium' ? 'Средний' : 'Низкий',
+    return Object.entries(stats).map(([priority, value]) => ({
+      name: priority === 'critical' ? 'Критический' :
+            priority === 'high' ? 'Высокий' :
+            priority === 'medium' ? 'Средний' : 'Низкий',
       value
     }));
   }, [filteredTasks]);
 
-  // Статистика по подразделениям
+  // Статистика по подразделениям (используем переданные units для названий)
   const unitStats = useMemo(() => {
     const stats: Record<string, number> = {};
     filteredTasks.forEach(task => {
-      stats[task.unitId] = (stats[task.unitId] || 0) + 1;
+      const unitId = task.unitId;
+      if (unitId) {
+        stats[unitId] = (stats[unitId] || 0) + 1;
+      }
     });
-    return Object.entries(stats).map(([unitId, count]) => ({
-      name: orgUnits.find(u => u.id === unitId)?.name || unitId,
-      value: count
-    })).sort((a, b) => b.value - a.value).slice(0, 10);
-  }, [filteredTasks]);
+    return Object.entries(stats)
+      .map(([unitId, count]) => ({
+        name: units.find(u => u.id === unitId)?.name || unitId,
+        value: count
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10);
+  }, [filteredTasks, units]);
 
   // Прогресс по дням (за последние 30 дней)
   const dailyProgress = useMemo(() => {
@@ -119,6 +132,11 @@ export function Statistics({ tasks }: StatisticsProps) {
     };
   }, [filteredTasks]);
 
+  // Вспомогательная функция для форматирования даты
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -158,7 +176,7 @@ export function Statistics({ tasks }: StatisticsProps) {
             className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
           >
             <option value="all">Все подразделения</option>
-            {orgUnits.map(unit => (
+            {units.map(unit => (
               <option key={unit.id} value={unit.id}>{unit.name}</option>
             ))}
           </select>
@@ -224,13 +242,13 @@ export function Statistics({ tasks }: StatisticsProps) {
                 cx="50%"
                 cy="50%"
                 labelLine={false}
-                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                 outerRadius={80}
                 fill="#8884d8"
                 dataKey="value"
               >
-                {statusStats.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                {statusStats.filter(s => s.value > 0).map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} name={entry.name} />
                 ))}
               </Pie>
               <Tooltip />

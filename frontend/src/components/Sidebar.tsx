@@ -10,7 +10,8 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
-  BarChart3 // Добавьте для статистики
+  BarChart3,
+  ListTodo // Добавим для задач
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useAuth } from '@/contexts/AuthContext';
@@ -32,8 +33,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount }: SidebarProps) {
 
   const menuItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Дашборд' },
-    { path: '/statistics', icon: BarChart3, label: 'Статистика' }, // Новая вкладка
-    { path: '/kanban', icon: Kanban, label: 'Канбан' },
+    { path: '/tasks', icon: ListTodo, label: 'Задачи' }, // Объединенный пункт для канбана и статистики
     { path: '/structure', icon: Users, label: 'Оргструктура' },
     { path: '/autoplan', icon: Calendar, label: 'Автоплан' },
     { path: '/notifications', icon: Bell, label: 'Уведомления', badge: unreadCount },
