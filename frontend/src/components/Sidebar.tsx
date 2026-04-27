@@ -38,8 +38,8 @@ export function Sidebar({ collapsed, onToggle, unreadCount }: SidebarProps) {
     { path: '/autoplan', icon: Calendar, label: 'Автоплан' },
     { path: '/notifications', icon: Bell, label: 'Уведомления', badge: unreadCount },
     { path: '/logs', icon: FileText, label: 'Журналы' },
-    { path: '/security', icon: Shield, label: 'Безопасность' },
-    { path: '/docs', icon: FileText, label: 'Документы' },
+    //{ path: '/security', icon: Shield, label: 'Безопасность' },
+    //{ path: '/docs', icon: FileText, label: 'Документы' },
   ];
 
   return (
@@ -49,7 +49,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount }: SidebarProps) {
     )}>
       <div className="flex h-full flex-col">
         <div className="flex items-center justify-between p-4">
-          {!collapsed && <span className="font-bold text-emerald-400">АСУ «Рубеж»</span>}
+          {!collapsed && <span className="font-bold text-emerald-400">Система мониторинга</span>}
           <button onClick={onToggle} className="p-1 hover:bg-slate-800 rounded">
             {collapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
           </button>

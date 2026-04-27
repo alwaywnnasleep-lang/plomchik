@@ -1,6 +1,7 @@
 from rest_framework import generics, status, filters
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
+from rest_framework import permissions
 from rest_framework.views import APIView
 from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
@@ -36,12 +37,16 @@ class TaskListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
+        if not user.is_authenticated:
+            return Task.objects.none()
+
         unit_ids = get_units_under_authority(user)
 
         qs = Task.objects.select_related(
             'assigned_to', 'created_by', 'org_unit',
-        ).prefetch_related('subtasks', 'attachments', 'comments')  # добавлен prefetch для вложений и комментариев
-
+        ).prefetch_related('subtasks', 'attachments', 'comments')
+        if not user.is_authenticated:
+            return Task.objects.none()
         if user.role in ('commander', 'deputy_commander'):
             return qs
         return qs.filter(
@@ -392,3 +397,15 @@ class SubmissionAttachmentUploadView(APIView):
             SubmissionAttachmentSerializer(attachment).data,
             status=status.HTTP_201_CREATED,
         )
+class UpdatePlannedTasksView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from datetime import timedelta
+        threshold = timezone.now() + timedelta(days=2)
+        updated = Task.objects.filter(
+            status=Task.Status.PLANNED,
+            deadline__lte=threshold,
+            deadline__gte=timezone.now()
+        ).update(status=Task.Status.TODO)
+        return Response({'updated': updated})

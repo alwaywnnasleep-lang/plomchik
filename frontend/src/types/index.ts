@@ -88,6 +88,9 @@ export interface Task {
   deadline: string;
   createdAt: string;
   tags: string[];
+  start_date?: string;
+  end_date?: string;
+  is_milestone?: boolean;
   subtasks?: { id: string; title: string; done: boolean }[];
   comments?: Comment[];
   attachments?: TaskFile[];

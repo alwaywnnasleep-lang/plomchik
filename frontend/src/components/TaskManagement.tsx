@@ -2,10 +2,24 @@ import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { KanbanBoard } from './KanbanBoard';
 import { Statistics } from './Statistics';
-import { LayoutGrid, BarChart3, Filter, Calendar, Users, AlertTriangle } from 'lucide-react';
+import { LayoutGrid, BarChart3, Filter, Calendar, Users, AlertTriangle, Download, RefreshCw } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import api from '@/services/api';
 import type { Task, OrgUnit } from '@/types';
+import { ReportGenerator } from '@/components/ReportGenerator';
+import { Calendar as BigCalendar, dateFnsLocalizer } from 'react-big-calendar';
+import { format, parse, startOfWeek, getDay } from 'date-fns';
+import { ru } from 'date-fns/locale/ru';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+
+const locales = { ru };
+const localizer = dateFnsLocalizer({
+  format,
+  parse,
+  startOfWeek,
+  getDay,
+  locales,
+});
 
 interface TaskManagementProps {
   tasks: Task[];
@@ -15,14 +29,15 @@ interface TaskManagementProps {
 
 export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManagementProps) {
   const { user } = useAuth();
-  const [viewMode, setViewMode] = useState<'kanban' | 'stats'>('kanban');
+  const [viewMode, setViewMode] = useState<'kanban' | 'stats' | 'calendar'>('kanban');
   const [selectedUnit, setSelectedUnit] = useState<string>('all');
   const [selectedPriority, setSelectedPriority] = useState<string>('all');
   const [selectedDateRange, setSelectedDateRange] = useState<'today' | 'week' | 'month' | 'all'>('all');
   const [units, setUnits] = useState<OrgUnit[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [updatingPlanned, setUpdatingPlanned] = useState(false);
 
-  // Загрузка подразделений
   useEffect(() => {
     loadUnits();
   }, []);
@@ -36,11 +51,28 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
     }
   };
 
-  // Фильтрация задач
+  const handleUpdatePlanned = async () => {
+    setUpdatingPlanned(true);
+    try {
+      const result = await api.updatePlannedTasks();
+      if (result.updated > 0) {
+        // Перезагружаем задачи
+        const freshTasks = await api.getTasks();
+        const tasksList = Array.isArray(freshTasks) ? freshTasks : (freshTasks.results || []);
+        // Преобразуем в нужный формат (упрощённо, но в реальности нужна та же трансформация, что в App)
+        onTasksChange(tasksList);
+        alert(`Перемещено ${result.updated} задач в "К выполнению"`);
+      }
+    } catch (error) {
+      console.error('Failed to update planned tasks:', error);
+      alert('Ошибка при обновлении задач');
+    } finally {
+      setUpdatingPlanned(false);
+    }
+  };
+
   const filteredTasks = useMemo(() => {
     let filtered = [...tasks];
-
-    // Поиск
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(t =>
@@ -49,18 +81,12 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
         t.tags.some(tag => tag.toLowerCase().includes(query))
       );
     }
-
-    // Подразделение
     if (selectedUnit !== 'all') {
       filtered = filtered.filter(t => t.unitId === selectedUnit);
     }
-
-    // Приоритет
     if (selectedPriority !== 'all') {
       filtered = filtered.filter(t => t.priority === selectedPriority);
     }
-
-    // Даты
     const now = new Date();
     if (selectedDateRange === 'today') {
       const todayStr = now.toISOString().split('T')[0];
@@ -80,7 +106,6 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
         return deadline >= now && deadline <= monthLater;
       });
     }
-
     return filtered;
   }, [tasks, searchQuery, selectedUnit, selectedPriority, selectedDateRange]);
 
@@ -113,6 +138,23 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleUpdatePlanned}
+            disabled={updatingPlanned}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
+          >
+            <RefreshCw size={14} className={updatingPlanned ? 'animate-spin' : ''} />
+            Обновить статусы
+          </button>
+
+          <button
+            onClick={() => setShowReportModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
+          >
+            <Download size={14} />
+            Отчёт
+          </button>
+
           <div className="bg-slate-100 rounded-lg p-1">
             <button
               onClick={() => setViewMode('kanban')}
@@ -137,6 +179,18 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
             >
               <BarChart3 size={16} />
               <span className="hidden sm:inline">Статистика</span>
+            </button>
+            <button
+              onClick={() => setViewMode('calendar')}
+              className={cn(
+                'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1',
+                viewMode === 'calendar'
+                  ? 'bg-white text-green-700 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-800'
+              )}
+            >
+              <Calendar size={16} />
+              <span className="hidden sm:inline">Календарь</span>
             </button>
           </div>
 
@@ -235,15 +289,40 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
         </div>
       )}
 
-      {viewMode === 'kanban' ? (
+      {viewMode === 'kanban' && (
         <KanbanBoard
           tasks={filteredTasks}
           onTasksChange={handleTasksChange}
           searchQuery={searchQuery}
         />
-      ) : (
-        <Statistics tasks={filteredTasks} units={units} />
       )}
+      {viewMode === 'stats' && <Statistics tasks={filteredTasks} units={units} />}
+      {viewMode === 'calendar' && (
+        <div className="bg-white rounded-xl border p-4 h-[700px]">
+          <BigCalendar
+            localizer={localizer}
+            culture="ru"
+            events={filteredTasks
+              .filter(t => t.status === 'planned' && (t.start_date || t.deadline))
+              .map(t => ({
+                id: t.id,
+                title: t.title,
+                start: t.start_date ? new Date(t.start_date) : new Date(t.deadline),
+                end: t.end_date ? new Date(t.end_date) : new Date(t.deadline),
+                resource: t,
+              }))}
+            startAccessor="start"
+            endAccessor="end"
+            style={{ height: '100%' }}
+            onSelectEvent={(event) => {
+              // TODO: открыть модалку с деталями задачи
+              console.log('Task clicked', event.resource);
+            }}
+          />
+        </div>
+      )}
+
+      {showReportModal && <ReportGenerator onClose={() => setShowReportModal(false)} />}
     </div>
   );
 }

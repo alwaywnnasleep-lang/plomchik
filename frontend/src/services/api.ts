@@ -385,12 +385,10 @@ class ApiService {
   uploadDocument(file: File) {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     return fetch(`${API_BASE_URL}/autoplan/upload/`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.getToken()}`,
-      },
+      headers: { 'Authorization': `Bearer ${this.getToken()}` },
       body: formData,
     }).then(res => res.json());
   }
@@ -404,31 +402,35 @@ class ApiService {
   }
 
   deleteDocument(id: number) {
-    return this.request(`/autoplan/documents/${id}/`, {
-      method: 'DELETE',
-    });
+    return this.request(`/autoplan/documents/${id}/`, { method: 'DELETE' });
   }
 
-  generateTasks(documentId: number, selectedIndices: number[], priority: string, orgUnitId?: number) {
+  generateTasks(documentId: number, selectedIndices: number[], priority: string, orgUnitId?: number, customEvents?: any[]) {
+    const payload: any = {
+      selected_indices: selectedIndices,
+      priority: priority,
+    };
+    if (orgUnitId) payload.org_unit_id = orgUnitId;
+    if (customEvents && customEvents.length) payload.custom_events = customEvents;
     return this.request(`/autoplan/documents/${documentId}/generate/`, {
       method: 'POST',
-      body: JSON.stringify({
-        selected_indices: selectedIndices,
-        priority: priority,
-        org_unit_id: orgUnitId,
-      }),
+      body: JSON.stringify(payload),
     });
   }
 
   parseDocumentSync(documentId: number) {
-    return this.request(`/autoplan/documents/${documentId}/parse-sync/`, {
-      method: 'POST',
-    });
+    return this.request(`/autoplan/documents/${documentId}/parse-sync/`, { method: 'POST' });
   }
 
   // ========== Безопасность ==========
   getSecurityStatus() {
     return this.request('/security/status/');
+  }
+  // ========== Автоматическое обновление статусов ==========
+  async updatePlannedTasks() {
+    return this.request('/tasks/update-planned/', {
+      method: 'POST',
+    });
   }
 }
 

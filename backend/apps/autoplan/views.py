@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from datetime import datetime
 
 from .models import ParsedDocument
 from .serializers import (
@@ -77,6 +78,11 @@ class GenerateTasksView(APIView):
         indices = serializer.validated_data['selected_indices']
         priority = serializer.validated_data['priority']
         org_unit_id = serializer.validated_data.get('org_unit_id')
+        custom_events = serializer.validated_data.get('custom_events', [])
+
+        # Если подразделение не указано, берём подразделение текущего пользователя
+        if not org_unit_id and request.user.org_unit:
+            org_unit_id = request.user.org_unit.id
 
         created_tasks = []
         for idx in indices:
@@ -84,34 +90,43 @@ class GenerateTasksView(APIView):
                 continue
             item = doc.parsed_data[idx]
 
+            # Переопределяем значения из custom_events
+            custom = next((ce for ce in custom_events if ce.get('originalIndex') == idx or ce.get('index') == idx), None)
+            title = custom.get('title') if custom else item.get('title', f'Мероприятие {idx+1}')
+            deadline_str = custom.get('date') if custom else item.get('date') or item.get('deadline')
+            responsible = custom.get('responsible') if custom else item.get('responsible', '')
+
             deadline = None
-            deadline_str = item.get('deadline', '')
+            start_date = None
+            end_date = None
+
+            # Парсим дату
             if deadline_str:
                 from django.utils.dateparse import parse_datetime, parse_date
-                deadline = parse_datetime(deadline_str)
-                if not deadline:
-                    d = parse_date(deadline_str)
-                    if d:
-                        from django.utils import timezone
-                        from datetime import time
-                        deadline = timezone.make_aware(
-                            timezone.datetime.combine(d, time(18, 0)),
-                        )
+                deadline = parse_datetime(deadline_str) or parse_date(deadline_str)
+                if deadline and not isinstance(deadline, datetime):
+                    deadline = datetime.combine(deadline, datetime.min.time())
+                start_date = deadline
+                end_date = deadline
 
+            # Создаём задачу со статусом 'planned' и is_milestone=True для календаря
             task = Task.objects.create(
-                title=item.get('title', f'Мероприятие {idx + 1}'),
-                description=item.get('note', ''),
-                status='planned',
+                title=title,
+                description=item.get('description', '') or f"Ответственный: {responsible}",
+                status=Task.Status.PLANNED,
                 priority=priority,
                 created_by=request.user,
                 org_unit_id=org_unit_id,
                 deadline=deadline,
+                start_date=start_date,
+                end_date=end_date,
+                is_milestone=True,
                 tags=['автоплан', doc.filename],
             )
             created_tasks.append({
                 'id': task.id,
                 'title': task.title,
-                'deadline': str(task.deadline) if task.deadline else None,
+                'deadline': deadline.isoformat() if deadline else None,
             })
 
         return Response({

@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: rubezh_db
+      POSTGRES_USER: rubezh_user
+      POSTGRES_PASSWORD: rubezh_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rubezh_user -d rubezh_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: ./backend
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DJANGO_SETTINGS_MODULE=rubezh.settings
+      - DATABASE_URL=postgres://rubezh_user:rubezh_pass@db:5432/rubezh_db
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=1
+      - ALLOWED_HOSTS=localhost,127.0.0.1,web,frontend
+    # Важно: ALLOWED_HOSTS должен включать имя сервиса frontend
+
+  celery_worker:
+    build: ./backend
+    command: celery -A rubezh worker --loglevel=info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DJANGO_SETTINGS_MODULE=rubezh.settings
+      - DATABASE_URL=postgres://rubezh_user:rubezh_pass@db:5432/rubezh_db
+      - REDIS_URL=redis://redis:6379/0
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:

@@ -3,7 +3,6 @@ from django.core.validators import MinValueValidator
 from django.conf import settings
 from django.utils.timezone import now
 
-
 class Task(models.Model):
     class Status(models.TextChoices):
         PLANNED = 'planned', 'Запланирована'
@@ -55,6 +54,10 @@ class Task(models.Model):
         related_name='subtasks'
     )
     deadline = models.DateTimeField('Срок выполнения', null=True, blank=True)
+    # Новые поля для мероприятий и диапазонов
+    start_date = models.DateTimeField('Дата начала', null=True, blank=True)
+    end_date = models.DateTimeField('Дата окончания', null=True, blank=True)
+    is_milestone = models.BooleanField('Мероприятие календаря', default=False)
     tags = models.JSONField('Теги', default=list)
     order = models.IntegerField('Порядок', default=0, validators=[MinValueValidator(0)])
     created_at = models.DateTimeField('Создано', auto_now_add=True)
@@ -76,10 +79,13 @@ class Task(models.Model):
             models.Index(fields=['parent_task']),
             models.Index(fields=['deadline']),
             models.Index(fields=['-created_at']),
+            models.Index(fields=['start_date']),
+            models.Index(fields=['end_date']),
         ]
 
     def __str__(self):
         return self.title
+
 
 
 class TaskAttachment(models.Model):

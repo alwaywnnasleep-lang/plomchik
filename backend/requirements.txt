@@ -12,3 +12,4 @@ PyPDF2==3.0.1
 openpyxl==3.1.5
 cryptography==44.0.0
 gunicorn==23.0.0
+dj-database-url==2.1.0

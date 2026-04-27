@@ -37,7 +37,9 @@ class AuditMiddleware:
         response = self.get_response(request)
 
         if request.method in AUDIT_METHODS and request.path.startswith('/api/'):
+            
             user = request.user if request.user.is_authenticated else None
+          
             ip = get_client_ip(request)
             category = get_category(request.path)
 

@@ -5,18 +5,20 @@ Django settings for rubezh project.
 from pathlib import Path
 import os
 from datetime import timedelta
+import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-your-secret-key-here-change-in-production'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-your-secret-key-here-change-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', '1') == '1'
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
-
+# Разрешаем все хосты в Docker (для разработки), либо из переменной
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,web').split(',')
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,web,frontend').split(',')
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -42,6 +44,7 @@ INSTALLED_APPS = [
     'apps.audit',
     'apps.autoplan',
     'apps.security',
+    'apps.reports',
 ]
 
 MIDDLEWARE = [
@@ -78,16 +81,12 @@ WSGI_APPLICATION = 'rubezh.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
-
+# Используем dj_database_url для чтения DATABASE_URL из окружения (удобно для Docker)
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'rubezh_db',
-        'USER': 'rubezh_user',
-        'PASSWORD': 'rubezh_pass',
-        'HOST': 'localhost',
-        'PORT': '5432',
-    }
+    'default': dj_database_url.config(
+        default='postgres://rubezh_user:rubezh_pass@localhost:5432/rubezh_db',
+        conn_max_age=600
+    )
 }
 
 # Password validation
@@ -151,13 +150,18 @@ SIMPLE_JWT = {
 
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",  # Vite dev server
+    "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://frontend:5173",
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:80",
+    "http://localhost:8000",  # для прямых запросов к API
 ]
-
-# Celery settings
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+# Celery settings - берём из переменной окружения или значение по умолчанию
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -170,4 +174,19 @@ SECURITY_CLEARANCE_LEVELS = {
     3: 'Особой важности',
     4: 'Гостайна',
     5: 'Доступ ограничен',
+}
+
+# Logging (опционально)
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Upload, FileText, Table, CheckCircle2, AlertTriangle, Zap, Plus, Calendar } from 'lucide-react';
+import { Upload, FileText, Table, CheckCircle2, AlertTriangle, Zap, Plus, Calendar, Edit2, Save, X } from 'lucide-react';
 import type { Task } from '@/types';
 import { cn } from '@/utils/cn';
 import api from '@/services/api';
@@ -10,10 +10,11 @@ interface AutoPlanProps {
 
 interface ParsedEvent {
   id: string;
-  name: string;
+  title: string;
   date: string;
   responsible: string;
   selected: boolean;
+  originalIndex: number;
 }
 
 export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
@@ -23,44 +24,16 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
   const [fileName, setFileName] = useState('');
   const [documentId, setDocumentId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState({ title: '', date: '', responsible: '' });
 
   const handleFileUpload = async (file: File) => {
     setLoading(true);
     setFileName(file.name);
-    
     try {
       const result = await api.uploadDocument(file);
       setDocumentId(result.id);
-      
-      // Ждем обработки документа
-      setTimeout(async () => {
-        try {
-          const doc = await api.getDocument(result.id);
-          if (doc.status === 'parsed') {
-            const parsedEvents: ParsedEvent[] = doc.parsed_data.map((item: any, index: number) => ({
-              id: `e${index}`,
-              name: item.title || item.name || `Мероприятие ${index + 1}`,
-              date: item.deadline || item.date || '',
-              responsible: item.responsible || '',
-              selected: true,
-            }));
-            setEvents(parsedEvents);
-            setStep('preview');
-          } else if (doc.status === 'error') {
-            alert(`Ошибка обработки: ${doc.error_message}`);
-            setStep('upload');
-          } else {
-            // Еще обрабатывается
-            setTimeout(() => checkDocumentStatus(result.id), 2000);
-          }
-        } catch (error) {
-          console.error('Failed to get document:', error);
-          alert('Ошибка при получении документа');
-          setStep('upload');
-        } finally {
-          setLoading(false);
-        }
-      }, 1500);
+      checkDocumentStatus(result.id);
     } catch (error) {
       console.error('Failed to upload document:', error);
       alert('Ошибка при загрузке файла');
@@ -72,12 +45,13 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
     try {
       const doc = await api.getDocument(id);
       if (doc.status === 'parsed') {
-        const parsedEvents: ParsedEvent[] = doc.parsed_data.map((item: any, index: number) => ({
+        const parsedEvents: ParsedEvent[] = (doc.parsed_data || []).map((item: any, index: number) => ({
           id: `e${index}`,
-          name: item.title || item.name || `Мероприятие ${index + 1}`,
-          date: item.deadline || item.date || '',
+          title: item.title || `Мероприятие ${index + 1}`,
+          date: item.date || (item.dates?.[0] || ''),
           responsible: item.responsible || '',
           selected: true,
+          originalIndex: index,
         }));
         setEvents(parsedEvents);
         setStep('preview');
@@ -95,30 +69,45 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      handleFileUpload(file);
-    }
+  const startEdit = (event: ParsedEvent) => {
+    setEditingId(event.id);
+    setEditValues({
+      title: event.title,
+      date: event.date.split('T')[0],
+      responsible: event.responsible,
+    });
   };
+
+  const saveEdit = (id: string) => {
+    setEvents(prev =>
+      prev.map(e =>
+        e.id === id
+          ? { ...e, title: editValues.title, date: editValues.date, responsible: editValues.responsible }
+          : e
+      )
+    );
+    setEditingId(null);
+  };
+
+  const cancelEdit = () => setEditingId(null);
 
   const handleGenerate = async () => {
     if (!documentId) return;
-    
     setLoading(true);
-    const selectedIndices = events
-      .map((e, index) => e.selected ? index : -1)
-      .filter(i => i !== -1);
-    
+    const selectedIndices = events.filter(e => e.selected).map(e => e.originalIndex);
+    const customEvents = events.filter(e => e.selected).map(e => ({
+      index: e.originalIndex,
+      title: e.title,
+      date: e.date,
+      responsible: e.responsible,
+    }));
     try {
-      const result = await api.generateTasks(documentId, selectedIndices, 'medium');
-      
-      // Преобразуем созданные задачи в формат компонента
+      const result = await api.generateTasks(documentId, selectedIndices, 'medium', null, customEvents);
       const generatedTasks: Task[] = result.tasks.map((t: any) => ({
         id: t.id.toString(),
         title: t.title,
         description: `Автоматически сгенерированная задача`,
-        status: 'backlog',
+        status: 'planned',
         priority: 'medium',
         assigneeId: '',
         creatorId: '',
@@ -127,7 +116,6 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
         createdAt: new Date().toISOString(),
         tags: ['автоплан'],
       }));
-      
       onTasksGenerated(generatedTasks);
       setStep('done');
     } catch (error) {
@@ -142,29 +130,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-800">Автопланирование</h1>
-        <p className="text-sm text-slate-500 mt-1">Парсинг документов и автоматическая генерация задач</p>
-      </div>
-
-      {/* Steps indicator */}
-      <div className="flex items-center gap-3">
-        {[
-          { id: 'upload', label: '1. Загрузка', icon: Upload },
-          { id: 'preview', label: '2. Предпросмотр', icon: Table },
-          { id: 'done', label: '3. Готово', icon: CheckCircle2 },
-        ].map((s, i) => (
-          <div key={s.id} className="flex items-center gap-2">
-            {i > 0 && <div className="w-8 h-px bg-slate-300" />}
-            <div className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium',
-              step === s.id ? 'bg-green-100 text-green-700' :
-              ['upload', 'preview', 'done'].indexOf(step) > ['upload', 'preview', 'done'].indexOf(s.id) 
-                ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'
-            )}>
-              <s.icon size={14} />
-              {s.label}
-            </div>
-          </div>
-        ))}
+        <p className="text-sm text-slate-500 mt-1">Парсинг плана‑календаря и автоматическая генерация задач</p>
       </div>
 
       {step === 'upload' && (
@@ -185,13 +151,13 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
           >
             <Upload size={48} className="mx-auto text-slate-400 mb-4" />
             <h3 className="text-lg font-medium text-slate-700 mb-2">Загрузите документ</h3>
-            <p className="text-sm text-slate-500 mb-4">Поддерживаемые форматы: DOC, DOCX, PDF, XLS, XLSX</p>
+            <p className="text-sm text-slate-500 mb-4">Поддерживаемые форматы: DOCX, XLSX, XLS</p>
             <input
               type="file"
               id="file-upload"
               className="hidden"
-              accept=".doc,.docx,.pdf,.xls,.xlsx"
-              onChange={handleFileSelect}
+              accept=".docx,.xlsx,.xls"
+              onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
               disabled={loading}
             />
             <button
@@ -211,8 +177,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
             </h3>
             <div className="space-y-3">
               {[
-                { format: 'DOCX / DOC', desc: 'Таблицы из документов Word с расписанием мероприятий', icon: '📄' },
-                { format: 'PDF', desc: 'Сканированные и текстовые PDF с планами', icon: '📋' },
+                { format: 'DOCX', desc: 'Таблицы из документов Word с расписанием мероприятий', icon: '📄' },
                 { format: 'XLSX / XLS', desc: 'Таблицы Excel с планами-графиками', icon: '📊' },
               ].map(f => (
                 <div key={f.format} className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
@@ -227,7 +192,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
             <div className="mt-4 p-3 bg-amber-50 rounded-lg flex items-start gap-2">
               <AlertTriangle size={14} className="text-amber-500 mt-0.5 flex-shrink-0" />
               <div className="text-xs text-amber-700">
-                Все документы обрабатываются в изолированном контуре. Данные шифруются AES-256 и не покидают локальную сеть.
+                Старый формат .doc не поддерживается. Пожалуйста, сохраните документ как .docx.
               </div>
             </div>
           </div>
@@ -261,6 +226,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                     <th className="text-left py-2 px-3 text-xs font-medium text-slate-500">Мероприятие</th>
                     <th className="text-left py-2 px-3 text-xs font-medium text-slate-500">Дата</th>
                     <th className="text-left py-2 px-3 text-xs font-medium text-slate-500">Ответственный</th>
+                    <th className="w-16"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -274,16 +240,57 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                           className="rounded border-slate-300 text-green-700"
                         />
                       </td>
-                      <td className="py-2 px-3 font-medium text-slate-700">{e.name}</td>
-                      <td className="py-2 px-3 text-slate-600 flex items-center gap-1">
-                        <Calendar size={12} />
-                        {e.date ? new Date(e.date).toLocaleDateString('ru-RU') : '—'}
+                      <td className="py-2 px-3">
+                        {editingId === e.id ? (
+                          <input
+                            value={editValues.title}
+                            onChange={e => setEditValues({ ...editValues, title: e.target.value })}
+                            className="border rounded px-2 py-1 w-full"
+                          />
+                        ) : (
+                          <span className="font-medium text-slate-700">{e.title}</span>
+                        )}
                       </td>
-                      <td className="py-2 px-3 text-slate-600">{e.responsible || '—'}</td>
+                      <td className="py-2 px-3">
+                        {editingId === e.id ? (
+                          <input
+                            type="date"
+                            value={editValues.date}
+                            onChange={e => setEditValues({ ...editValues, date: e.target.value })}
+                            className="border rounded px-2 py-1"
+                          />
+                        ) : (
+                          <span className="text-slate-600 flex items-center gap-1">
+                            <Calendar size={12} />
+                            {e.date ? new Date(e.date).toLocaleDateString('ru-RU') : '—'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        {editingId === e.id ? (
+                          <input
+                            value={editValues.responsible}
+                            onChange={e => setEditValues({ ...editValues, responsible: e.target.value })}
+                            className="border rounded px-2 py-1 w-full"
+                          />
+                        ) : (
+                          <span className="text-slate-600">{e.responsible || '—'}</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        {editingId === e.id ? (
+                          <div className="flex gap-1">
+                            <button onClick={() => saveEdit(e.id)} className="text-green-700"><Save size={16} /></button>
+                            <button onClick={cancelEdit} className="text-red-500"><X size={16} /></button>
+                          </div>
+                        ) : (
+                          <button onClick={() => startEdit(e)} className="text-slate-400 hover:text-green-700"><Edit2 size={16} /></button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+               </table>
             </div>
 
             <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-100">
@@ -318,7 +325,8 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
           <h3 className="text-xl font-bold text-slate-800 mb-2">Задачи сгенерированы!</h3>
           <p className="text-sm text-slate-500 mb-6">
             Создано {events.filter(e => e.selected).length} задач из документа «{fileName}».
-            <br />Все задачи добавлены на канбан-доску в статусе «Запланировано».
+            <br />Все задачи добавлены в календарь со статусом «Запланировано».
+            <br />За 2 дня до дедлайна они автоматически попадут в канбан-доску.
           </p>
           <div className="flex justify-center gap-3">
             <button

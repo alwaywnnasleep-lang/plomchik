@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import type { User as UserType } from '@/types';
 import { cn } from '@/utils/cn';
+import { translateRank } from '@/utils/rank';
+
 
 interface HeaderProps {
   currentUser: UserType;
@@ -89,7 +91,7 @@ export function Header({ currentUser, searchQuery, onSearchChange, unreadCount, 
               {getInitials()}
             </div>
             <div className="hidden sm:block text-left">
-              <div className="text-xs font-medium text-slate-700">{currentUser.rank} {currentUser.fullName}</div>
+              <div className="text-xs font-medium text-slate-700"> {translateRank(currentUser.rank)} {currentUser.fullName} {currentUser.fullName}</div>
               <div className="text-[10px] text-slate-400">{currentUser.position}</div>
             </div>
             <ChevronDown size={14} className={cn('text-slate-400 transition-transform', menuOpen && 'rotate-180')} />

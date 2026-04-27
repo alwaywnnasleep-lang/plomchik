@@ -33,7 +33,7 @@ export function Login() {
           <div className="w-16 h-16 bg-emerald-500 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Shield size={32} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800">АСУ «Рубеж»</h1>
+          <h1 className="text-2xl font-bold text-slate-800">Cистема мониторинга</h1>
           <p className="text-sm text-slate-500 mt-1">Вход в защищенную систему</p>
         </div>
 
@@ -72,7 +72,7 @@ export function Login() {
 
           <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 p-3 rounded-lg">
             <Lock size={14} className="text-emerald-500" />
-            <span>Защищенное соединение TLS 1.3</span>
+            
           </div>
 
           <button
@@ -85,7 +85,7 @@ export function Login() {
         </form>
 
         <div className="mt-6 text-center text-xs text-slate-400">
-          © 2025 АСУ «Рубеж» • Для служебного пользования
+          © 2026 Cистема мониторинга • Для служебного пользования
         </div>
       </div>
     </div>
