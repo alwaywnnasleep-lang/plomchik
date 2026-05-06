@@ -279,7 +279,6 @@ class ApiService {
   }
 
   addTaskComment(taskId: number, text: string, attachments?: File[]) {
-    // Пока не поддерживаем файлы в комментариях (будет отдельный эндпоинт)
     return this.request(`/tasks/${taskId}/comments/`, {
       method: 'POST',
       body: JSON.stringify({ text }),
@@ -332,7 +331,8 @@ class ApiService {
     });
   }
 
-  movePersonnel(userId: number, targetUnitId: number) {
+  // ВНИМАНИЕ: Здесь мы разрешаем передавать null в targetUnitId для удаления!
+  movePersonnel(userId: number, targetUnitId: number | null) {
     return this.request('/structure/move-personnel/', {
       method: 'POST',
       body: JSON.stringify({ user_id: userId, target_unit_id: targetUnitId }),
@@ -426,6 +426,7 @@ class ApiService {
   getSecurityStatus() {
     return this.request('/security/status/');
   }
+  
   // ========== Автоматическое обновление статусов ==========
   async updatePlannedTasks() {
     return this.request('/tasks/update-planned/', {

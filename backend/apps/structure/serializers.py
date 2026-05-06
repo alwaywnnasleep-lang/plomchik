@@ -28,15 +28,14 @@ class OrgUnitTreeSerializer(serializers.ModelSerializer):
         return OrgUnitTreeSerializer(children, many=True, context=self.context).data
 
     def get_personnel_list(self, obj):
-        # Используем related_name 'personnel' (предполагается, что у User есть поле org_unit)
-        personnel = getattr(obj, 'personnel', None)
-        if personnel is None:
+        # Получаем данные напрямую из обновленного property в модели
+        personnel = obj.personnel_list
+        if not personnel:
             return []
-        return UserShortSerializer(personnel.all(), many=True).data
+        return UserShortSerializer(personnel, many=True).data
 
     def get_personnel_count(self, obj):
-        personnel = getattr(obj, 'personnel', None)
-        return personnel.count() if personnel else 0
+        return obj.personnel_count
 
     def get_total_personnel_count(self, obj):
         return obj.get_total_personnel_count()
@@ -69,7 +68,8 @@ class StructureChangeSerializer(serializers.ModelSerializer):
 
 class MovePersonnelSerializer(serializers.Serializer):
     user_id = serializers.IntegerField()
-    target_unit_id = serializers.IntegerField()
+    # Разрешаем пустое значение для удаления сотрудника из подразделения
+    target_unit_id = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_user_id(self, value):
         if not User.objects.filter(id=value, is_active=True).exists():
@@ -77,6 +77,6 @@ class MovePersonnelSerializer(serializers.Serializer):
         return value
 
     def validate_target_unit_id(self, value):
-        if not OrgUnit.objects.filter(id=value).exists():
+        if value is not None and not OrgUnit.objects.filter(id=value).exists():
             raise serializers.ValidationError('Подразделение не найдено.')
         return value

@@ -20,9 +20,10 @@ export function Statistics({ tasks, units = [] }: StatisticsProps) {
 
   // Фильтрация задач
   const filteredTasks = useMemo(() => {
-    return tasks.filter(task => {
-      if (selectedUnit !== 'all' && task.unitId !== selectedUnit) return false;
-      if (selectedPriority !== 'all' && task.priority !== selectedPriority) return false;
+    return (tasks || []).filter(task => {
+      // Приводим оба значения к строке для безопасного сравнения
+      if (selectedUnit !== 'all' && String(task.unitId) !== String(selectedUnit)) return false;
+      if (selectedPriority !== 'all' && String(task.priority) !== String(selectedPriority)) return false;
       return true;
     });
   }, [tasks, selectedUnit, selectedPriority]);
@@ -100,14 +101,19 @@ export function Statistics({ tasks, units = [] }: StatisticsProps) {
     for (let i = 29; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(date.getDate() - i);
-      const dateStr = date.toISOString().split('T')[0];
+      
+      // Формируем YYYY-MM-DD в локальном часовом поясе, а не в UTC
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      const dateStr = `${yyyy}-${mm}-${dd}`;
       
       const completed = filteredTasks.filter(t => 
-        t.status === 'done' && t.createdAt.startsWith(dateStr)
+        t.status === 'done' && t.createdAt?.startsWith(dateStr)
       ).length;
       
       days.push({
-        date: dateStr.slice(5), // MM-DD
+        date: `${dd}.${mm}`, // Более привычный формат ДД.ММ для графика
         completed
       });
     }

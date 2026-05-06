@@ -46,12 +46,24 @@ class OrgUnit(models.Model):
     
     @property
     def personnel_list(self):
-        # Предполагается, что у модели User есть поле org_unit с related_name='personnel'
-        return getattr(self, 'personnel', None) or []
+        # Надежное чтение личного состава для любых вариантов полей
+        if hasattr(self, 'personnel'):
+            return self.personnel.filter(is_active=True)
+            
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        if hasattr(User, 'org_unit'):
+            return User.objects.filter(org_unit=self, is_active=True)
+        if hasattr(User, 'unit'):
+            return User.objects.filter(unit=self, is_active=True)
+            
+        return []
     
     @property
     def personnel_count(self):
-        return self.personnel_list.count() if self.personnel_list else 0
+        personnel = self.personnel_list
+        return personnel.count() if personnel else 0
     
     def get_total_personnel_count(self):
         # Рекурсивный подсчёт всех пользователей в этом подразделении и всех дочерних

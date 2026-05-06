@@ -19,8 +19,6 @@ class OrgUnitTreeView(generics.ListAPIView):
     serializer_class = OrgUnitTreeSerializer
 
     def get_queryset(self):
-        # Загружаем корневые элементы и подгружаем детей и командиров
-        # prefetch_related('children') может быть тяжёлым, но для дерева нужно
         return OrgUnit.objects.filter(
             parent__isnull=True
         ).prefetch_related(
@@ -119,47 +117,76 @@ class MovePersonnelView(APIView):
 
     def post(self, request):
         serializer = MovePersonnelSerializer(data=request.data)
-        if serializer.is_valid():
-            user_id = serializer.validated_data['user_id']
-            target_unit_id = serializer.validated_data['target_unit_id']
-
-            try:
-                user = User.objects.get(id=user_id)
-                target_unit = OrgUnit.objects.get(id=target_unit_id)
-            except (User.DoesNotExist, OrgUnit.DoesNotExist):
-                return Response(
-                    {'error': 'Пользователь или подразделение не найдены'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            if not can_manage_unit(request.user, target_unit):
-                return Response(
-                    {'error': 'Нет прав для перемещения в это подразделение'},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-            old_unit = user.org_unit
-            old_unit_name = old_unit.name if old_unit else '—'
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
-            user.org_unit = target_unit
-            user.save()
+        user_id = serializer.validated_data['user_id']
+        target_unit_id = serializer.validated_data.get('target_unit_id')
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'Не найдено'}, status=status.HTTP_404_NOT_FOUND)
+
+        old_unit_name = "—"
+        if hasattr(user, 'org_unit') and user.org_unit:
+            old_unit_name = user.org_unit.name
+        elif hasattr(user, 'unit') and user.unit:
+            old_unit_name = user.unit.name
+
+        target_unit = None
+        if target_unit_id:
+            try:
+                target_unit = OrgUnit.objects.get(id=target_unit_id)
+            except OrgUnit.DoesNotExist:
+                pass
+
+        if target_unit:
+            # ДОБАВЛЕНИЕ ИЛИ ПЕРЕМЕЩЕНИЕ В ПОДРАЗДЕЛЕНИЕ
+            if hasattr(target_unit, 'personnel'):
+                target_unit.personnel.add(user) 
+            elif hasattr(user, 'org_unit'):
+                user.org_unit = target_unit
+                user.save(update_fields=['org_unit'])
+            elif hasattr(user, 'unit'):
+                user.unit = target_unit
+                user.save(update_fields=['unit'])
+            else:
+                user.org_unit = target_unit
+                user.save()
 
             StructureChange.objects.create(
                 org_unit=target_unit,
                 org_unit_name=target_unit.name,
                 change_type='personnel_moved',
-                description=(
-                    f'{user.full_name} перемещён из '
-                    f'«{old_unit_name}» в «{target_unit.name}»'
-                ),
-                old_data={'unit_id': old_unit.id if old_unit else None, 'unit_name': old_unit_name},
-                new_data={'unit_id': target_unit.id, 'unit_name': target_unit.name},
+                description=f'{user.full_name} перемещен из «{old_unit_name}» в «{target_unit.name}»',
                 changed_by=request.user,
             )
+        else:
+            # УДАЛЕНИЕ ИЗ ПОДРАЗДЕЛЕНИЯ
+            old_unit_obj = None
+            if hasattr(user, 'org_unit'):
+                old_unit_obj = user.org_unit
+                user.org_unit = None
+                user.save(update_fields=['org_unit'])
+            elif hasattr(user, 'unit'):
+                old_unit_obj = user.unit
+                user.unit = None
+                user.save(update_fields=['unit'])
+            else:
+                user.org_unit = None
+                user.save()
 
-            return Response({'success': 'Пользователь перемещён'})
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            if old_unit_obj:
+                StructureChange.objects.create(
+                    org_unit=old_unit_obj,
+                    org_unit_name=old_unit_obj.name,
+                    change_type='personnel_moved',
+                    description=f'{user.full_name} исключен из подразделения «{old_unit_name}»',
+                    changed_by=request.user,
+                )
+
+        return Response({'success': True})
 
 
 class StructureHistoryView(generics.ListAPIView):
