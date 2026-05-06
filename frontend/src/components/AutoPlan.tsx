@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Upload, FileText, Table, CheckCircle2, AlertTriangle, Zap, Plus, Calendar, Edit2, Save, X } from 'lucide-react';
+import { Upload, FileText, CheckCircle2, AlertTriangle, Zap, Plus, Calendar, Edit2, Save, X } from 'lucide-react';
 import type { Task } from '@/types';
 import { cn } from '@/utils/cn';
 import api from '@/services/api';
@@ -15,7 +15,19 @@ interface ParsedEvent {
   responsible: string;
   selected: boolean;
   originalIndex: number;
+  parentTitle?: string;
+  indentLevel?: number;
+  remindBefore: string;
 }
+
+const remindOptions = [
+  { value: '', label: 'Не напоминать' },
+  { value: '1_day', label: 'За 1 день' },
+  { value: '2_days', label: 'За 2 дня' },
+  { value: '3_days', label: 'За 3 дня' },
+  { value: '1_week', label: 'За 1 неделю' },
+  { value: '1_hour', label: 'За 1 час' },
+];
 
 export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
   const [step, setStep] = useState<'upload' | 'preview' | 'done'>('upload');
@@ -35,7 +47,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
       setDocumentId(result.id);
       checkDocumentStatus(result.id);
     } catch (error) {
-      console.error('Failed to upload document:', error);
+      console.error('Upload error:', error);
       alert('Ошибка при загрузке файла');
       setLoading(false);
     }
@@ -45,26 +57,29 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
     try {
       const doc = await api.getDocument(id);
       if (doc.status === 'parsed') {
-        const parsedEvents: ParsedEvent[] = (doc.parsed_data || []).map((item: any, index: number) => ({
-          id: `e${index}`,
-          title: item.title || `Мероприятие ${index + 1}`,
+        const parsedEvents: ParsedEvent[] = (doc.parsed_data || []).map((item: any, idx: number) => ({
+          id: `e${idx}`,
+          title: item.title || `Мероприятие ${idx + 1}`,
           date: item.date || (item.dates?.[0] || ''),
           responsible: item.responsible || '',
           selected: true,
-          originalIndex: index,
+          originalIndex: idx,
+          parentTitle: item.parent_title,
+          indentLevel: item.indent_level || 0,
+          remindBefore: '',
         }));
         setEvents(parsedEvents);
         setStep('preview');
         setLoading(false);
       } else if (doc.status === 'error') {
-        alert(`Ошибка обработки: ${doc.error_message}`);
+        alert(`Ошибка: ${doc.error_message}`);
         setStep('upload');
         setLoading(false);
       } else {
         setTimeout(() => checkDocumentStatus(id), 2000);
       }
     } catch (error) {
-      console.error('Failed to check document status:', error);
+      console.error('Status check error:', error);
       setLoading(false);
     }
   };
@@ -91,18 +106,26 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
 
   const cancelEdit = () => setEditingId(null);
 
+  const updateRemindBefore = (id: string, value: string) => {
+    setEvents(prev => prev.map(e => (e.id === id ? { ...e, remindBefore: value } : e)));
+  };
+
   const handleGenerate = async () => {
     if (!documentId) return;
     setLoading(true);
-    const selectedIndices = events.filter(e => e.selected).map(e => e.originalIndex);
-    const customEvents = events.filter(e => e.selected).map(e => ({
+    const selectedEvents = events.filter(e => e.selected);
+    const selectedIndices = selectedEvents.map(e => e.originalIndex);
+    const customEvents = selectedEvents.map(e => ({
       index: e.originalIndex,
       title: e.title,
       date: e.date,
       responsible: e.responsible,
+      remind_before: e.remindBefore,
+      parent_title: e.parentTitle,
+      indent_level: e.indentLevel,
     }));
     try {
-      const result = await api.generateTasks(documentId, selectedIndices, 'medium', null, customEvents);
+      const result = await api.generateTasks(documentId as number, selectedIndices, 'medium', undefined, customEvents);
       const generatedTasks: Task[] = result.tasks.map((t: any) => ({
         id: t.id.toString(),
         title: t.title,
@@ -119,11 +142,15 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
       onTasksGenerated(generatedTasks);
       setStep('done');
     } catch (error) {
-      console.error('Failed to generate tasks:', error);
+      console.error('Generation error:', error);
       alert('Ошибка при генерации задач');
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleSelectAll = (checked: boolean) => {
+    setEvents(events.map(e => ({ ...e, selected: checked })));
   };
 
   return (
@@ -218,14 +245,15 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                     <th className="text-left py-2 px-3 text-xs font-medium text-slate-500 w-8">
                       <input
                         type="checkbox"
-                        checked={events.every(e => e.selected)}
-                        onChange={e => setEvents(events.map(ev => ({ ...ev, selected: e.target.checked })))}
+                        checked={events.length > 0 && events.every(e => e.selected)}
+                        onChange={e => toggleSelectAll(e.target.checked)}
                         className="rounded border-slate-300 text-green-700"
                       />
                     </th>
                     <th className="text-left py-2 px-3 text-xs font-medium text-slate-500">Мероприятие</th>
                     <th className="text-left py-2 px-3 text-xs font-medium text-slate-500">Дата</th>
                     <th className="text-left py-2 px-3 text-xs font-medium text-slate-500">Ответственный</th>
+                    <th className="text-left py-2 px-3 text-xs font-medium text-slate-500">Напомнить за</th>
                     <th className="w-16"></th>
                   </tr>
                 </thead>
@@ -240,7 +268,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                           className="rounded border-slate-300 text-green-700"
                         />
                       </td>
-                      <td className="py-2 px-3">
+                      <td className="py-2 px-3" style={{ paddingLeft: `${(e.indentLevel || 0) * 24 + 12}px` }}>
                         {editingId === e.id ? (
                           <input
                             value={editValues.title}
@@ -248,7 +276,12 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                             className="border rounded px-2 py-1 w-full"
                           />
                         ) : (
-                          <span className="font-medium text-slate-700">{e.title}</span>
+                          <div className="flex flex-col">
+                            <span className="font-medium text-slate-700 flex items-center gap-1.5">
+                              {((e.indentLevel ?? 0) > 0 || e.parentTitle) && <span className="text-slate-300">↳</span>}
+                              {e.title}
+                            </span>
+                          </div>
                         )}
                       </td>
                       <td className="py-2 px-3">
@@ -277,6 +310,17 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                           <span className="text-slate-600">{e.responsible || '—'}</span>
                         )}
                       </td>
+                      <td className="py-2 px-3">
+                        <select
+                          value={e.remindBefore}
+                          onChange={(ev) => updateRemindBefore(e.id, ev.target.value)}
+                          className="text-sm border rounded px-2 py-1"
+                        >
+                          {remindOptions.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </td>
                       <td className="py-2 px-3 text-right">
                         {editingId === e.id ? (
                           <div className="flex gap-1">
@@ -290,7 +334,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                     </tr>
                   ))}
                 </tbody>
-               </table>
+              </table>
             </div>
 
             <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-100">

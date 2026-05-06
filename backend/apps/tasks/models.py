@@ -2,6 +2,12 @@ from django.db import models
 from django.core.validators import MinValueValidator
 from django.conf import settings
 from django.utils.timezone import now
+from django.db.models import Q, F
+
+class TaskQuerySet(models.QuerySet):
+    def overdue(self):
+        """Возвращает задачи, у которых прошел дедлайн и которые не выполнены."""
+        return self.filter(deadline__lt=now()).exclude(status=Task.Status.DONE)
 
 class Task(models.Model):
     class Status(models.TextChoices):
@@ -63,8 +69,12 @@ class Task(models.Model):
     created_at = models.DateTimeField('Создано', auto_now_add=True)
     updated_at = models.DateTimeField('Обновлено', auto_now=True)
 
+    objects = TaskQuerySet.as_manager()
+
     def is_overdue(self):
-        return self.deadline and self.deadline < now()
+        if self.status == self.Status.DONE:
+            return False
+        return bool(self.deadline and self.deadline < now())
 
     class Meta:
         verbose_name = 'Задача'
@@ -82,13 +92,34 @@ class Task(models.Model):
             models.Index(fields=['start_date']),
             models.Index(fields=['end_date']),
         ]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(start_date__isnull=True) | Q(end_date__isnull=True) | Q(start_date__lte=F('end_date')),
+                name='check_start_date_before_end_date'
+            )
+        ]
 
     def __str__(self):
         return self.title
 
 
+class AbstractAttachment(models.Model):
+    """Абстрактная базовая модель для всех вложений в системе."""
+    filename = models.CharField('Имя файла', max_length=255)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='Загрузил'
+    )
+    created_at = models.DateTimeField('Загружено', auto_now_add=True)
 
-class TaskAttachment(models.Model):
+    class Meta:
+        abstract = True
+
+
+class TaskAttachment(AbstractAttachment):
     task = models.ForeignKey(
         Task,
         on_delete=models.CASCADE,
@@ -96,16 +127,16 @@ class TaskAttachment(models.Model):
         verbose_name='Задача'
     )
     file = models.FileField('Файл', upload_to='task_attachments/%Y/%m/%d/')
-    filename = models.CharField('Имя файла', max_length=255)
+
+    # Переопределяем related_name для пользователя, чтобы избежать конфликтов
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         verbose_name='Загрузил',
-        related_name='uploaded_attachments'
+        related_name='uploaded_task_attachments'
     )
-    created_at = models.DateTimeField('Загружено', auto_now_add=True)
 
     class Meta:
         verbose_name = 'Вложение задачи'
@@ -147,7 +178,7 @@ class TaskComment(models.Model):
         return f'Комментарий к {self.task} от {self.user}'
 
 
-class CommentAttachment(models.Model):
+class CommentAttachment(AbstractAttachment):
     """Вложение к комментарию."""
     comment = models.ForeignKey(
         TaskComment,
@@ -156,7 +187,6 @@ class CommentAttachment(models.Model):
         verbose_name='Комментарий'
     )
     file = models.FileField('Файл', upload_to='comment_attachments/%Y/%m/%d/')
-    filename = models.CharField('Имя файла', max_length=255)
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -165,7 +195,6 @@ class CommentAttachment(models.Model):
         verbose_name='Загрузил',
         related_name='uploaded_comment_attachments'
     )
-    created_at = models.DateTimeField('Загружено', auto_now_add=True)
 
     class Meta:
         verbose_name = 'Вложение комментария'
@@ -215,7 +244,7 @@ class TaskSubmission(models.Model):
         return f'Сдача {self.task}'
 
 
-class SubmissionAttachment(models.Model):
+class SubmissionAttachment(AbstractAttachment):
     """Вложение к сдаче задания."""
     submission = models.ForeignKey(
         TaskSubmission,
@@ -224,7 +253,6 @@ class SubmissionAttachment(models.Model):
         verbose_name='Сдача'
     )
     file = models.FileField('Файл', upload_to='submission_attachments/%Y/%m/%d/')
-    filename = models.CharField('Имя файла', max_length=255)
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -233,7 +261,6 @@ class SubmissionAttachment(models.Model):
         verbose_name='Загрузил',
         related_name='uploaded_submission_attachments'
     )
-    created_at = models.DateTimeField('Загружено', auto_now_add=True)
 
     class Meta:
         verbose_name = 'Вложение сдачи'

@@ -8,6 +8,7 @@ class CanManageStructure(BasePermission):
             return True
         if not request.user.is_authenticated:
             return False
+        # Разрешаем командиру, заместителю и начальнику отдела (для создания групп в своём отделе)
         return request.user.role in ('commander', 'deputy_commander', 'department_head')
 
     def has_object_permission(self, request, view, obj):

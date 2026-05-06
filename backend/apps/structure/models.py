@@ -43,6 +43,22 @@ class OrgUnit(models.Model):
     
     def __str__(self):
         return self.name
+    
+    @property
+    def personnel_list(self):
+        # Предполагается, что у модели User есть поле org_unit с related_name='personnel'
+        return getattr(self, 'personnel', None) or []
+    
+    @property
+    def personnel_count(self):
+        return self.personnel_list.count() if self.personnel_list else 0
+    
+    def get_total_personnel_count(self):
+        # Рекурсивный подсчёт всех пользователей в этом подразделении и всех дочерних
+        total = self.personnel_count
+        for child in self.children.all():
+            total += child.get_total_personnel_count()
+        return total
 
 
 class StructureChange(models.Model):

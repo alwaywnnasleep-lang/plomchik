@@ -185,7 +185,8 @@ def _parse_military_calendar_xlsx(file_path: str) -> List[Dict[str, Any]]:
 
     first_date_col = date_columns[0]
     events = []
-
+    
+    data_rows = []
     for row in rows[date_row_idx + 1:]:
         if not row or all(cell == '' for cell in row):
             continue
@@ -194,17 +195,73 @@ def _parse_military_calendar_xlsx(file_path: str) -> List[Dict[str, Any]]:
             continue
         responsible = row[1] if len(row) > 1 else ''
         personnel = row[2] if len(row) > 2 else ''
-
+        
+        date_cells = []
         for col_idx in date_columns:
             if col_idx >= len(row):
                 continue
             cell_value = row[col_idx]
-            if not cell_value:
-                continue
+            if cell_value:
+                date_cells.append(cell_value)
+                
+        data_rows.append({
+            'raw_title': title,
+            'responsible': responsible,
+            'personnel': personnel,
+            'date_cells': date_cells
+        })
+
+    has_children = [False] * len(data_rows)
+    for i, dr in enumerate(data_rows):
+        fc = dr['raw_title'][0] if dr['raw_title'] else ''
+        if (fc.islower() or fc.isdigit() or dr['raw_title'].startswith('-')) and i > 0:
+            for j in range(i - 1, -1, -1):
+                pfc = data_rows[j]['raw_title'][0] if data_rows[j]['raw_title'] else ''
+                if not (pfc.islower() or pfc.isdigit() or data_rows[j]['raw_title'].startswith('-')):
+                    has_children[j] = True
+                    break
+
+    last_parent = {}
+
+    for i, dr in enumerate(data_rows):
+        raw_title = dr['raw_title']
+        responsible = dr['responsible']
+        personnel = dr['personnel']
+        date_cells = dr['date_cells']
+
+        fc = raw_title[0] if raw_title else ''
+        is_child = bool(last_parent) and (fc.islower() or fc.isdigit() or raw_title.startswith('-'))
+
+        if is_child:
+            title = raw_title
+            parent_title = last_parent['raw_title']
+            indent_level = 1
+            if not responsible:
+                responsible = last_parent['responsible']
+            if not personnel:
+                personnel = last_parent['personnel']
+        else:
+            title = raw_title
+            parent_title = None
+            indent_level = 0
+            last_parent = {'raw_title': raw_title, 'responsible': responsible, 'personnel': personnel}
+            
+            if has_children[i] and not date_cells:
+                events.append({
+                    'title': title,
+                    'parent_title': None,
+                    'indent_level': 0,
+                    'responsible': responsible,
+                    'personnel': personnel,
+                    'date': '',
+                    'is_range': False
+                })
+
+        for cell_value in date_cells:
             normalized = normalize_date_str(cell_value)
             dates = expand_range(normalized, base_year, base_month)
             if dates:
-                events.append(_make_event(title, responsible, personnel, dates))
+                events.append(_make_event(title, responsible, personnel, dates, parent_title, indent_level))
 
     return _deduplicate_events(events)
 
@@ -335,22 +392,36 @@ def _parse_military_calendar_docx(file_path: str) -> List[Dict[str, Any]]:
         date_cells = dr['date_cells']
 
         fc = raw_title[0] if raw_title else ''
-        is_child = bool(last_parent) and (fc.islower() or fc.isdigit())
+        is_child = bool(last_parent) and (fc.islower() or fc.isdigit() or raw_title.startswith('-'))
 
         if is_child:
-            # Объединяем с родительским заголовком
-            title = last_parent['raw_title'] + ' ' + raw_title
+            title = raw_title
+            parent_title = last_parent['raw_title']
+            indent_level = 1
             if not responsible:
                 responsible = last_parent['responsible']
             if not personnel:
                 personnel = last_parent['personnel']
         else:
             title = raw_title
+            parent_title = None
+            indent_level = 0
             last_parent = {'raw_title': raw_title, 'responsible': responsible, 'personnel': personnel}
-
-            # Если у этого родителя есть дочерние строки — он тоже создаёт события
-            # (собственные даты родителя не теряются)
-            pass  # продолжаем создавать события ниже
+            
+            # Добавляем родителя как отдельное мероприятие даже если у него нет дат,
+            # чтобы он отображался в таблице (если у него есть дети).
+            if has_children[i] and not date_cells:
+                # Дадим ему фиктивную дату или просто оставим без даты,
+                # если парсер поддерживает мероприятия без дат.
+                events.append({
+                    'title': title,
+                    'parent_title': None,
+                    'indent_level': 0,
+                    'responsible': responsible,
+                    'personnel': personnel,
+                    'date': '',
+                    'is_range': False
+                })
 
         # Создаём события из заранее собранных ячеек с датами
         for cell_text, spanned_days in date_cells:
@@ -358,13 +429,13 @@ def _parse_military_calendar_docx(file_path: str) -> List[Dict[str, Any]]:
             dates = expand_range(normalized, base_year, base_month)
 
             if dates:
-                events.append(_make_event(title, responsible, personnel, dates))
+                events.append(_make_event(title, responsible, personnel, dates, parent_title, indent_level))
             else:
                 # Текст не парсится как дата: используем охваченные дни напрямую
                 start = datetime(base_year, base_month, spanned_days[0])
                 end = datetime(base_year, base_month, spanned_days[-1])
                 events.append(_make_event(title, responsible, personnel,
-                                          [start] if start == end else [start, end]))
+                                          [start] if start == end else [start, end], parent_title, indent_level))
 
     result = _deduplicate_events(events)
     logger.info(f"Military calendar parser (DOCX): найдено {len(result)} мероприятий")
@@ -380,11 +451,13 @@ def _is_day(cell: str) -> bool:
 
 
 def _make_event(title: str, responsible: str, personnel: str,
-                dates: List) -> Dict[str, Any]:
+                dates: List, parent_title: str = None, indent_level: int = 0) -> Dict[str, Any]:
     """Формирует словарь события из списка дат."""
     if len(dates) > 1:
         return {
             'title': title,
+            'parent_title': parent_title,
+            'indent_level': indent_level,
             'responsible': responsible,
             'personnel': personnel,
             'start_date': dates[0].isoformat(),
@@ -394,6 +467,8 @@ def _make_event(title: str, responsible: str, personnel: str,
         }
     return {
         'title': title,
+        'parent_title': parent_title,
+        'indent_level': indent_level,
         'responsible': responsible,
         'personnel': personnel,
         'date': dates[0].isoformat(),

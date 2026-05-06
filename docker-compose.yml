@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:16
@@ -11,11 +9,15 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+    networks:
+      - app_network
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
+    networks:
+      - app_network
 
   backend:
     build: ./backend
@@ -33,6 +35,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - DEBUG=1
       - ALLOWED_HOSTS=localhost,127.0.0.1,backend
+    networks:
+      - app_network
 
   celery_worker:
     build: ./backend
@@ -46,6 +50,8 @@ services:
       - DJANGO_SETTINGS_MODULE=rubezh.settings
       - DATABASE_URL=postgres://rubezh_user:rubezh_pass@db:5432/rubezh_db
       - REDIS_URL=redis://redis:6379/0
+    networks:
+      - app_network
 
   frontend:
     build: ./frontend
@@ -53,6 +59,12 @@ services:
       - "80:80"
     depends_on:
       - backend
+    networks:
+      - app_network
 
 volumes:
   postgres_data:
+
+networks:
+  app_network:
+    driver: bridge

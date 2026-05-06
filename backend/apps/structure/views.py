@@ -19,9 +19,13 @@ class OrgUnitTreeView(generics.ListAPIView):
     serializer_class = OrgUnitTreeSerializer
 
     def get_queryset(self):
+        # Загружаем корневые элементы и подгружаем детей и командиров
+        # prefetch_related('children') может быть тяжёлым, но для дерева нужно
         return OrgUnit.objects.filter(
-            parent__isnull=True,
-        ).prefetch_related('children', 'personnel', 'commander')
+            parent__isnull=True
+        ).prefetch_related(
+            'children', 'commander'
+        ).select_related('commander')
 
 
 class OrgUnitListCreateView(generics.ListCreateAPIView):
@@ -61,7 +65,6 @@ class OrgUnitDetailView(generics.RetrieveUpdateDestroyAPIView):
     def perform_update(self, serializer):
         old_unit = self.get_object()
         old_name = old_unit.name
-        old_type = old_unit.unit_type
         old_commander = old_unit.commander_id
         
         unit = serializer.save()

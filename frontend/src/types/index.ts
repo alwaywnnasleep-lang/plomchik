@@ -26,6 +26,8 @@ export interface OrgUnit {
   commanderId: string | null;
   type: 'unit' | 'department' | 'group';
   children?: OrgUnit[];
+  commanderDetail?: any;
+  personnelList?: any[];
 }
 
 export interface Comment {

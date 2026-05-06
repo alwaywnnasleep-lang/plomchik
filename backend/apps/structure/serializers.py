@@ -10,11 +10,9 @@ User = get_user_model()
 class OrgUnitTreeSerializer(serializers.ModelSerializer):
     children = serializers.SerializerMethodField()
     commander_detail = UserShortSerializer(source='commander', read_only=True)
-    personnel_list = UserShortSerializer(
-        source='personnel', many=True, read_only=True,
-    )
-    personnel_count = serializers.IntegerField(read_only=True)
-    total_personnel_count = serializers.IntegerField(read_only=True)
+    personnel_list = serializers.SerializerMethodField()
+    personnel_count = serializers.SerializerMethodField()
+    total_personnel_count = serializers.SerializerMethodField()
 
     class Meta:
         model = OrgUnit
@@ -28,6 +26,20 @@ class OrgUnitTreeSerializer(serializers.ModelSerializer):
     def get_children(self, obj):
         children = obj.children.all().order_by('order', 'name')
         return OrgUnitTreeSerializer(children, many=True, context=self.context).data
+
+    def get_personnel_list(self, obj):
+        # Используем related_name 'personnel' (предполагается, что у User есть поле org_unit)
+        personnel = getattr(obj, 'personnel', None)
+        if personnel is None:
+            return []
+        return UserShortSerializer(personnel.all(), many=True).data
+
+    def get_personnel_count(self, obj):
+        personnel = getattr(obj, 'personnel', None)
+        return personnel.count() if personnel else 0
+
+    def get_total_personnel_count(self, obj):
+        return obj.get_total_personnel_count()
 
 
 class OrgUnitWriteSerializer(serializers.ModelSerializer):

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { KanbanBoard } from './KanbanBoard';
 import { Statistics } from './Statistics';
-import { LayoutGrid, BarChart3, Filter, Calendar, Users, AlertTriangle, Download, RefreshCw } from 'lucide-react';
+import { LayoutGrid, BarChart3, Filter, Calendar, Users, AlertTriangle, Download, RefreshCw, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import api from '@/services/api';
 import type { Task, OrgUnit } from '@/types';
@@ -20,6 +20,66 @@ const localizer = dateFnsLocalizer({
   getDay,
   locales,
 });
+
+const messages = {
+  allDay: 'Весь день',
+  previous: 'Назад',
+  next: 'Далее',
+  today: 'Сегодня',
+  month: 'Месяц',
+  week: 'Неделя',
+  day: 'День',
+  agenda: 'Расписание',
+  date: 'Дата',
+  time: '',
+  event: 'Мероприятие',
+  noEventsInRange: 'Нет мероприятий в этом диапазоне.',
+  showMore: (total: number) => `+ Ещё (${total})`
+};
+
+const CustomToolbar = (toolbar: any) => {
+  const goToBack = () => toolbar.onNavigate('PREV');
+  const goToNext = () => toolbar.onNavigate('NEXT');
+  const goToCurrent = () => toolbar.onNavigate('TODAY');
+
+  const label = () => {
+    return <span className="capitalize">{format(toolbar.date, 'LLLL yyyy', { locale: ru })}</span>;
+  };
+
+  return (
+    <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center gap-2">
+        <button onClick={goToCurrent} className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-700 font-medium transition-colors">
+          Сегодня
+        </button>
+        <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg p-0.5">
+          <button onClick={goToBack} className="p-1 hover:bg-white rounded text-slate-600 hover:text-slate-800 transition-colors">
+            <ChevronLeft size={18} />
+          </button>
+          <button onClick={goToNext} className="p-1 hover:bg-white rounded text-slate-600 hover:text-slate-800 transition-colors">
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      </div>
+      <div className="text-lg font-bold text-slate-800 flex items-center gap-2">
+        <CalendarDays size={20} className="text-green-700" />
+        {label()}
+      </div>
+      <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg p-0.5">
+        <button onClick={() => toolbar.onView('month')} className={cn("px-3 py-1 text-sm rounded-md transition-all", toolbar.view === 'month' ? "bg-white shadow-sm border border-slate-200 text-green-700 font-medium" : "text-slate-600 hover:text-slate-800 border border-transparent")}>Месяц</button>
+        <button onClick={() => toolbar.onView('agenda')} className={cn("px-3 py-1 text-sm rounded-md transition-all", toolbar.view === 'agenda' ? "bg-white shadow-sm border border-slate-200 text-green-700 font-medium" : "text-slate-600 hover:text-slate-800 border border-transparent")}>Расписание</button>
+      </div>
+    </div>
+  );
+};
+
+const CustomEvent = ({ event }: any) => {
+  return (
+    <div className="text-xs font-medium truncate px-1 py-0.5" title={event.title}>
+      {event.title}
+    </div>
+  );
+};
 
 interface TaskManagementProps {
   tasks: Task[];
@@ -298,10 +358,32 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
       )}
       {viewMode === 'stats' && <Statistics tasks={filteredTasks} units={units} />}
       {viewMode === 'calendar' && (
-        <div className="bg-white rounded-xl border p-4 h-[700px]">
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm h-[700px]">
+          <style>{`
+            .rbc-agenda-time-cell { display: none !important; }
+            .rbc-time-column { display: none !important; }
+            .rbc-event { 
+              background-color: #f0fdf4 !important; 
+              color: #15803d !important; 
+              border: 1px solid #bbf7d0 !important; 
+              border-radius: 6px !important; 
+              padding: 2px 4px !important;
+            }
+            .rbc-event.rbc-selected { background-color: #dcfce7 !important; }
+            .rbc-today { background-color: #f8fafc !important; }
+            .rbc-month-view { border-radius: 8px; overflow: hidden; border-color: #e2e8f0; border-width: 1px; }
+            .rbc-header { padding: 10px 0; font-weight: 600; color: #475569; text-transform: capitalize; border-bottom: 1px solid #e2e8f0 !important; }
+            .rbc-day-bg + .rbc-day-bg { border-left: 1px solid #e2e8f0 !important; }
+            .rbc-month-row + .rbc-month-row { border-top: 1px solid #e2e8f0 !important; }
+            .rbc-date-cell { padding: 4px 8px; font-weight: 500; color: #64748b; }
+            .rbc-off-range-bg { background-color: #f8fafc; }
+          `}</style>
           <BigCalendar
             localizer={localizer}
             culture="ru"
+            messages={messages}
+            views={['month', 'agenda']}
+            defaultView="month"
             events={filteredTasks
               .filter(t => t.status === 'planned' && (t.start_date || t.deadline))
               .map(t => ({
@@ -317,6 +399,19 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
             onSelectEvent={(event) => {
               // TODO: открыть модалку с деталями задачи
               console.log('Task clicked', event.resource);
+            }}
+            formats={{
+              eventTimeRangeFormat: () => '',
+              agendaTimeRangeFormat: () => '',
+              agendaTimeFormat: () => '',
+              timeGutterFormat: () => '',
+            }}
+            components={{
+              toolbar: CustomToolbar,
+              event: CustomEvent,
+              agenda: {
+                time: () => null
+              }
             }}
           />
         </div>
