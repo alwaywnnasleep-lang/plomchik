@@ -16,6 +16,8 @@ import type { Task, Notification, OrgUnit, TaskFile } from '@/types';
 import { cn } from '@/utils/cn';
 import { Profile } from '@/components/Profile';
 import { TaskManagement } from '@/components/TaskManagement';
+// Импортируем компонент Базы знаний
+import { KnowledgeBase } from '@/components/KnowledgeBase'; 
 
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -185,6 +187,9 @@ function App() {
                 onNotificationsChange={setNotifications} 
               />
             } />
+            {/* Маршрут для Базы знаний */}
+            <Route path="/knowledge" element={<KnowledgeBase />} />
+            
             <Route path="/logs" element={<AuditLogs />} />
             <Route path="/security" element={<SecurityPanel />} />
             <Route path="/docs" element={<DocsPage />} />

@@ -7,7 +7,7 @@ class AuditLogSerializer(serializers.ModelSerializer):
         source='user.username', read_only=True, default='system',
     )
     user_full_name = serializers.CharField(
-        source='user.short_name', read_only=True, default='Система',
+        source='user.full_name', read_only=True, default='Система',
     )
     category_display = serializers.CharField(
         source='get_category_display', read_only=True,

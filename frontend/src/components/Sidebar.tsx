@@ -38,6 +38,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount }: SidebarProps) {
     { path: '/autoplan', icon: Calendar, label: 'Автоплан' },
     { path: '/notifications', icon: Bell, label: 'Уведомления', badge: unreadCount },
     { path: '/logs', icon: FileText, label: 'Журналы' },
+    { path: 'knowledge', icon: FileText, label: 'База знаний' },
     //{ path: '/security', icon: Shield, label: 'Безопасность' },
     //{ path: '/docs', icon: FileText, label: 'Документы' },
   ];

@@ -238,7 +238,6 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
     }
   };
 
-  // ФУНКЦИЯ УДАЛЕНИЯ, КОТОРАЯ БЫЛА УТЕРЯНА
   const handleRemovePersonnel = async (userId: string) => {
     if (!canEdit) return;
     if (!confirm('Исключить сотрудника из текущего подразделения?')) return;
@@ -281,15 +280,16 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
             <History size={16} />
             История
           </button>
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-300 rounded text-slate-700 hover:bg-slate-50 transition-colors"
-            title="Обновить"
-          >
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            Обновить
-          </button>
+          <div title="Обновить">
+            <button
+              onClick={handleRefresh}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-300 rounded text-slate-700 hover:bg-slate-50 transition-colors"
+            >
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              Обновить
+            </button>
+          </div>
           {canEdit && (
             <button
               onClick={() => { setAddParentId(null); setShowAddModal(true); }}
@@ -337,7 +337,6 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
           </div>
         </div>
 
-        {/* Sidebar info */}
         <div className="space-y-6">
           <div className="bg-white rounded-md border border-slate-200 p-5 shadow-sm">
             <h3 className="text-sm font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-2">Статистика</h3>
@@ -376,16 +375,17 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
                   const hierarchyPath = getUnitPath(targetUnitId, allUnits);
 
                   return (
-                    <div key={u.id} className="flex items-start gap-3 p-2 rounded border border-transparent hover:border-slate-200 hover:bg-slate-50 transition-colors">
-                      <div className="w-8 h-8 rounded bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 text-xs font-medium flex-shrink-0">
-                        {u.full_name?.split(' ').map((n: string) => n[0]).join('') || 'U'}
-                      </div>
+                    <div key={u.id} className="flex items-start p-2 rounded border border-transparent hover:border-slate-200 hover:bg-slate-50 transition-colors">
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium text-slate-800 truncate" title={`${translateRank(u.rank)} ${u.full_name}`}>
                           {translateRank(u.rank)} {u.full_name}
                         </div>
                         <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
-                          {isCommander && <UserCog size={14} className="text-blue-600 flex-shrink-0" title="Командир" />}
+                          {isCommander && (
+                            <span title="Командир" className="flex-shrink-0 flex items-center justify-center">
+                              <UserCog size={14} className="text-blue-600" />
+                            </span>
+                          )}
                           <span className="truncate" title={hierarchyPath}>{hierarchyPath}</span>
                         </div>
                       </div>
@@ -545,11 +545,19 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
         
         {canEdit && (
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button onClick={() => setShowPersonnelModal(true)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors" title="Управление составом"><Users size={16} /></button>
-            <button onClick={() => onAddChild(node.id)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors" title="Добавить подразделение"><Plus size={16} /></button>
-            <button onClick={() => onEdit(node)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors" title="Редактировать"><Edit3 size={16} /></button>
+            <span title="Управление составом">
+              <button onClick={() => setShowPersonnelModal(true)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors"><Users size={16} /></button>
+            </span>
+            <span title="Добавить подразделение">
+              <button onClick={() => onAddChild(node.id)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors"><Plus size={16} /></button>
+            </span>
+            <span title="Редактировать">
+              <button onClick={() => onEdit(node)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors"><Edit3 size={16} /></button>
+            </span>
             {node.type !== 'unit' && (
-              <button onClick={() => onDelete(node.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="Удалить"><Trash2 size={16} /></button>
+              <span title="Удалить">
+                <button onClick={() => onDelete(node.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"><Trash2 size={16} /></button>
+              </span>
             )}
           </div>
         )}
@@ -577,15 +585,15 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
                     <User size={14} className="text-slate-400" />
                     <span>{translateRank(u.rank)} {u.full_name}</span>
                   </div>
-                  {/* КРЕСТИК ДЛЯ УДАЛЕНИЯ В ДЕРЕВЕ */}
                   {canEdit && (
-                    <button 
-                      onClick={() => onRemovePersonnel(u.id.toString())}
-                      className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-200 rounded transition-colors"
-                      title="Исключить из подразделения"
-                    >
-                      <X size={14} />
-                    </button>
+                    <span title="Исключить из подразделения">
+                      <button 
+                        onClick={() => onRemovePersonnel(u.id.toString())}
+                        className="p-1 text-slate-400 hover:text-red-600 hover:bg-slate-200 rounded transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </span>
                   )}
                 </div>
               ))}
@@ -673,23 +681,18 @@ function ManagePersonnelModal({ unitId, unitName, unitUsers, allUsers, onClose, 
               {unitUsers.length > 0 ? (
                 unitUsers.map(u => (
                   <div key={u.id} className="flex items-center justify-between p-2.5 bg-white border border-slate-200 rounded shadow-sm">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 text-xs font-medium flex-shrink-0">
-                        {u.full_name?.split(' ').map((n: string) => n[0]).join('') || 'U'}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-slate-800 truncate">{u.full_name}</div>
-                        <div className="text-xs text-slate-500">{translateRank(u.rank)}</div>
-                      </div>
+                    <div className="flex-1 min-w-0 pr-2">
+                      <div className="text-sm font-medium text-slate-800 truncate">{u.full_name}</div>
+                      <div className="text-xs text-slate-500">{translateRank(u.rank)}</div>
                     </div>
-                    {/* КРЕСТИК ДЛЯ УДАЛЕНИЯ В МОДАЛКЕ */}
-                    <button 
-                      onClick={() => onRemovePersonnel(u.id.toString())}
-                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors flex-shrink-0"
-                      title="Исключить из подразделения"
-                    >
-                      <X size={16} />
-                    </button>
+                    <span title="Исключить из подразделения">
+                      <button 
+                        onClick={() => onRemovePersonnel(u.id.toString())}
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors flex-shrink-0"
+                      >
+                        <X size={16} />
+                      </button>
+                    </span>
                   </div>
                 ))
               ) : (

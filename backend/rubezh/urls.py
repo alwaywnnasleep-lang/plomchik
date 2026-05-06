@@ -26,6 +26,7 @@ urlpatterns = [
     path('api/autoplan/', include('apps.autoplan.urls')),
     path('api/security/', include('apps.security.urls')),
     path('api/reports/', include('apps.reports.urls')),
+    path('api/knowledge/', include('apps.knowledge.urls')),
 ]
 
 if settings.DEBUG:

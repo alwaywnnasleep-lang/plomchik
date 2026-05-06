@@ -331,7 +331,6 @@ class ApiService {
     });
   }
 
-  // ВНИМАНИЕ: Здесь мы разрешаем передавать null в targetUnitId для удаления!
   movePersonnel(userId: number, targetUnitId: number | null) {
     return this.request('/structure/move-personnel/', {
       method: 'POST',
@@ -433,6 +432,35 @@ class ApiService {
       method: 'POST',
     });
   }
-}
 
+  // ========== База Знаний ==========
+  getKnowledgeDocuments(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params) : '';
+    return this.request(`/knowledge/${query}`);
+  }
+
+  deleteKnowledgeDocument(id: number) {
+    return this.request(`/knowledge/${id}/`, {
+      method: 'DELETE',
+    });
+  }
+
+  uploadKnowledgeDocument(formData: FormData) {
+    return fetch(`${API_BASE_URL}/knowledge/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.getToken()}`,
+        // ВНИМАНИЕ: Content-Type не указываем, браузер сам подставит multipart/form-data и boundary
+      },
+      body: formData,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || 'Upload failed');
+      }
+      return res.json();
+    });
+  }
+}
+  
 export default new ApiService();

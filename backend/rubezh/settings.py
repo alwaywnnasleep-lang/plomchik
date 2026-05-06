@@ -16,9 +16,9 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-your-secret-key-here-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', '1') == '1'
 
-# Разрешаем все хосты в Docker (для разработки), либо из переменной
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,web').split(',')
+# Исправлено: объединение хостов без дублирования
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,web,frontend').split(',')
+
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'apps.autoplan',
     'apps.security',
     'apps.reports',
+    'apps.knowledge',
 ]
 
 MIDDLEWARE = [
@@ -55,6 +56,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    # Middleware для обработки заголовка X-Frame-Options
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.audit.middleware.AuditMiddleware',
 ]
@@ -80,8 +82,6 @@ TEMPLATES = [
 WSGI_APPLICATION = 'rubezh.wsgi.application'
 
 # Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
-# Используем dj_database_url для чтения DATABASE_URL из окружения (удобно для Docker)
 DATABASES = {
     'default': dj_database_url.config(
         default='postgres://rubezh_user:rubezh_pass@localhost:5432/rubezh_db',
@@ -91,18 +91,10 @@ DATABASES = {
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
 # Internationalization
@@ -115,6 +107,7 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
+# Настройки медиа-файлов для загрузки документов
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
@@ -156,9 +149,18 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost",
     "http://127.0.0.1",
     "http://localhost:80",
-    "http://localhost:8000",  # для прямых запросов к API
+    "http://localhost:8000",
 ]
-# Celery settings - берём из переменной окружения или значение по умолчанию
+
+# Важно: разрешаем передачу куки и заголовков при загрузке файлов
+CORS_ALLOW_CREDENTIALS = True
+
+# ========== ИСПРАВЛЕНИЕ ДЛЯ ПРЕДПРОСМОТРА В FIREFOX ==========
+# Разрешаем встраивание PDF и изображений в iframe внутри одного домена
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+# =============================================================
+
+# Celery settings
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
@@ -167,7 +169,7 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
-# Security settings
+# Security levels
 SECURITY_CLEARANCE_LEVELS = {
     1: 'Секретно',
     2: 'Совершенно секретно',
@@ -176,7 +178,7 @@ SECURITY_CLEARANCE_LEVELS = {
     5: 'Доступ ограничен',
 }
 
-# Logging (опционально)
+# Logging
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
