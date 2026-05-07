@@ -177,3 +177,4 @@ export function CalendarBoard({ tasks, onAddReminder }: CalendarBoardProps) {
     </div>
   );
 }
+//TODO Реализовать добавление напоминания на бэкенд при клике на мероприятие (через проп onAddReminder)

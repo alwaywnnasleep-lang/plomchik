@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   ChevronRight, ChevronDown, Users, UserCog, Plus, Trash2, 
-  Edit3, X, History, Building2, ArrowRight, RefreshCw, Briefcase, LayoutGrid, User
+  Edit3, X, History, Building2, ArrowRight, RefreshCw, 
+  Briefcase, LayoutGrid, User, Info, Target, CheckCircle, 
+  Clock, AlertTriangle, Activity
 } from 'lucide-react';
 import type { OrgUnit } from '@/types';
 import { cn } from '@/utils/cn';
@@ -72,6 +74,7 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [addParentId, setAddParentId] = useState<string | null>(null);
   const [editingUnit, setEditingUnit] = useState<OrgUnit | null>(null);
+  const [selectedUser, setSelectedUser] = useState<any | null>(null); 
   const [structureHistory, setStructureHistory] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -148,7 +151,7 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
     Promise.all([loadTree(), loadUsers(), loadHistory()]).finally(() => setInitialLoading(false));
   }, [loadTree, loadUsers, loadHistory]);
 
-  const canEdit = user?.role === 'commander' || user?.role === 'deputy_commander';
+  const canEdit = user?.role === 'commander' || user?.role === 'deputy_commander' || user?.role === 'admin';
 
   const flattenUnits = (nodes: OrgUnit[]): OrgUnit[] => {
     let all: OrgUnit[] = [];
@@ -263,7 +266,7 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-in fade-in duration-300">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-800">Организационная структура</h1>
@@ -327,6 +330,7 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
                   onEdit={setEditingUnit}
                   onMovePersonnelBulk={handleMovePersonnelBulk}
                   onRemovePersonnel={handleRemovePersonnel}
+                  onUserClick={setSelectedUser}
                 />
               ))
             ) : (
@@ -375,9 +379,13 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
                   const hierarchyPath = getUnitPath(targetUnitId, allUnits);
 
                   return (
-                    <div key={u.id} className="flex items-start p-2 rounded border border-transparent hover:border-slate-200 hover:bg-slate-50 transition-colors">
+                    <div key={u.id} className="flex items-start p-2 rounded border border-transparent hover:border-slate-200 hover:bg-slate-50 transition-colors group">
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-slate-800 truncate" title={`${translateRank(u.rank)} ${u.full_name}`}>
+                        <div 
+                          className="text-sm font-medium text-slate-800 truncate cursor-pointer hover:text-blue-600 hover:underline underline-offset-2 transition-colors" 
+                          title="Открыть карточку"
+                          onClick={() => setSelectedUser(u)}
+                        >
                           {translateRank(u.rank)} {u.full_name}
                         </div>
                         <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
@@ -450,12 +458,19 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
           onSave={handleUpdateUnit}
         />
       )}
+      {selectedUser && (
+        <UserCardModal
+          user={selectedUser}
+          allUnits={allUnits}
+          onClose={() => setSelectedUser(null)}
+        />
+      )}
     </div>
   );
 }
 
 // ========== TreeNode ==========
-function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete, onEdit, onMovePersonnelBulk, onRemovePersonnel }: {
+function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete, onEdit, onMovePersonnelBulk, onRemovePersonnel, onUserClick }: {
   node: OrgUnit & { children?: OrgUnit[] };
   depth: number;
   users: any[];
@@ -466,6 +481,7 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
   onEdit: (unit: OrgUnit) => void;
   onMovePersonnelBulk: (userIds: string[], targetUnitId: string) => Promise<void>;
   onRemovePersonnel: (userId: string) => Promise<void>;
+  onUserClick: (user: any) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [showPersonnelModal, setShowPersonnelModal] = useState(false);
@@ -523,7 +539,11 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
           
           <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
             {commander ? (
-              <div className="flex items-center gap-1.5" title="Командир">
+              <div 
+                className="flex items-center gap-1.5 cursor-pointer hover:text-blue-600 hover:underline underline-offset-2 transition-colors" 
+                title="Командир. Нажмите, чтобы открыть профиль"
+                onClick={() => onUserClick(commander)}
+              >
                 <UserCog size={14} className="text-blue-600" />
                 <span className="truncate">{translateRank(commander.rank)} {commander.full_name}</span>
               </div>
@@ -572,6 +592,7 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
           onClose={() => setShowPersonnelModal(false)}
           onMovePersonnelBulk={onMovePersonnelBulk}
           onRemovePersonnel={onRemovePersonnel}
+          onUserClick={onUserClick}
         />
       )}
       
@@ -581,9 +602,12 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
             <div className="pl-6 py-2 mb-3 space-y-2 border-l border-slate-200 ml-2">
               {unitUsers.map(u => (
                 <div key={u.id} className="flex items-center justify-between text-sm text-slate-700 bg-slate-50/50 p-1.5 rounded border border-slate-100">
-                  <div className="flex items-center gap-2.5">
+                  <div 
+                    className="flex items-center gap-2.5 cursor-pointer hover:text-blue-600 transition-colors"
+                    onClick={() => onUserClick(u)}
+                  >
                     <User size={14} className="text-slate-400" />
-                    <span>{translateRank(u.rank)} {u.full_name}</span>
+                    <span className="hover:underline underline-offset-2">{translateRank(u.rank)} {u.full_name}</span>
                   </div>
                   {canEdit && (
                     <span title="Исключить из подразделения">
@@ -614,6 +638,7 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
                   onEdit={onEdit}
                   onMovePersonnelBulk={onMovePersonnelBulk}
                   onRemovePersonnel={onRemovePersonnel}
+                  onUserClick={onUserClick}
                 />
               ))}
             </div>
@@ -625,8 +650,8 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
 }
 
 // ========== ManagePersonnelModal ==========
-function ManagePersonnelModal({ unitId, unitName, unitUsers, allUsers, onClose, onMovePersonnelBulk, onRemovePersonnel }: {
-  unitId: string; unitName: string; unitUsers: any[]; allUsers: any[]; onClose: () => void; onMovePersonnelBulk: (userIds: string[], targetUnitId: string) => Promise<void>; onRemovePersonnel: (userId: string) => Promise<void>;
+function ManagePersonnelModal({ unitId, unitName, unitUsers, allUsers, onClose, onMovePersonnelBulk, onRemovePersonnel, onUserClick }: {
+  unitId: string; unitName: string; unitUsers: any[]; allUsers: any[]; onClose: () => void; onMovePersonnelBulk: (userIds: string[], targetUnitId: string) => Promise<void>; onRemovePersonnel: (userId: string) => Promise<void>; onUserClick: (user: any) => void;
 }) {
   const [isAdding, setIsAdding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -682,7 +707,13 @@ function ManagePersonnelModal({ unitId, unitName, unitUsers, allUsers, onClose, 
                 unitUsers.map(u => (
                   <div key={u.id} className="flex items-center justify-between p-2.5 bg-white border border-slate-200 rounded shadow-sm">
                     <div className="flex-1 min-w-0 pr-2">
-                      <div className="text-sm font-medium text-slate-800 truncate">{u.full_name}</div>
+                      <div 
+                        className="text-sm font-medium text-slate-800 truncate cursor-pointer hover:text-blue-600 hover:underline underline-offset-2 transition-colors"
+                        onClick={() => onUserClick(u)}
+                        title="Открыть карточку"
+                      >
+                        {u.full_name}
+                      </div>
                       <div className="text-xs text-slate-500">{translateRank(u.rank)}</div>
                     </div>
                     <span title="Исключить из подразделения">
@@ -734,7 +765,16 @@ function ManagePersonnelModal({ unitId, unitName, unitUsers, allUsers, onClose, 
                         className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-slate-800 truncate">{u.full_name}</div>
+                        <div className="flex items-center gap-2">
+                           <div className="text-sm font-medium text-slate-800 truncate">{u.full_name}</div>
+                           <span 
+                             title="Открыть профиль" 
+                             className="text-slate-300 hover:text-blue-500 transition-colors cursor-pointer p-1"
+                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onUserClick(u); }}
+                           >
+                             <Info size={14} />
+                           </span>
+                        </div>
                         <div className="text-xs text-slate-500">{translateRank(u.rank)}</div>
                       </div>
                     </label>
@@ -822,6 +862,7 @@ function AddUnitModal({ parentId, units, users, onClose, onAdd }: any) {
 // ========== EditUnitModal ==========
 function EditUnitModal({ unit, users, onClose, onSave }: any) {
   const [name, setName] = useState(unit.name);
+  const [type, setType] = useState<OrgUnit['type']>(unit.type);
   const [commanderId, setCommanderId] = useState(unit.commanderId || '');
 
   return (
@@ -838,6 +879,14 @@ function EditUnitModal({ unit, users, onClose, onSave }: any) {
               <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" />
             </div>
             <div>
+              <label className="text-sm font-medium text-slate-700 mb-1.5 block">Тип подразделения</label>
+              <select value={type} onChange={e => setType(e.target.value as OrgUnit['type'])} className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 bg-white">
+                <option value="unit">Часть</option>
+                <option value="department">Отдел</option>
+                <option value="group">Группа</option>
+              </select>
+            </div>
+            <div>
               <label className="text-sm font-medium text-slate-700 mb-1.5 block">Командир</label>
               <select value={commanderId} onChange={e => setCommanderId(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 bg-white">
                 <option value="">Не назначен</option>
@@ -849,9 +898,163 @@ function EditUnitModal({ unit, users, onClose, onSave }: any) {
           </div>
           <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-slate-100">
             <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded text-slate-700 hover:bg-slate-50 transition-colors">Отмена</button>
-            <button onClick={() => onSave({ ...unit, name, commanderId: commanderId || null })} className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors shadow-sm">
+            <button onClick={() => onSave({ ...unit, name, type, commanderId: commanderId || null })} className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors shadow-sm">
               Сохранить
             </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== UserCardModal ==========
+function UserCardModal({ user, allUnits, onClose }: { user: any, allUnits: OrgUnit[], onClose: () => void }) {
+  const [stats, setStats] = useState({ total: 0, done: 0, inProgress: 0, overdue: 0 });
+  const [loadingStats, setLoadingStats] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchUserStats = async () => {
+      try {
+        // 1. Пролистываем ВСЕ страницы с задачами, чтобы собрать полную картину
+        let allTasks: any[] = [];
+        let page = 1;
+        let hasNext = true;
+
+        while (hasNext) {
+          const res = await api.getTasks({ page: String(page) });
+          
+          if (Array.isArray(res)) {
+            allTasks = res;
+            hasNext = false; // Если бэкенд отдал просто массив без страниц
+          } else if (res && res.results) {
+            allTasks = [...allTasks, ...res.results];
+            hasNext = !!res.next; // Идем на следующую страницу, если она есть
+            page++;
+          } else {
+            hasNext = false;
+          }
+        }
+        
+        // 2. Ищем задачи пользователя по всем возможным ключам (assigneeId или assigned_to)
+        const userTasks = allTasks.filter((t: any) => {
+          const assignedId = t.assigneeId || t.assigned_to || (t.assignee && t.assignee.id);
+          return String(assignedId) === String(user.id);
+        });
+
+        if (isMounted) {
+          // 3. Высчитываем статистику
+          setStats({
+            total: userTasks.length,
+            done: userTasks.filter((t: any) => String(t.status).toLowerCase() === 'done').length,
+            // Считаем "в работе" и те, что на проверке
+            inProgress: userTasks.filter((t: any) => ['in_progress', 'review'].includes(String(t.status).toLowerCase())).length,
+            overdue: userTasks.filter((t: any) => 
+              String(t.status).toLowerCase() !== 'done' && 
+              t.deadline && new Date(t.deadline) < new Date()
+            ).length
+          });
+          setLoadingStats(false);
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки статистики пользователя:', error);
+        if (isMounted) setLoadingStats(false);
+      }
+    };
+    
+    fetchUserStats();
+    
+    return () => { isMounted = false; };
+  }, [user.id]);
+
+  if (!user) return null;
+  
+  const unitId = getSafeUnitId(user);
+  const unitPath = getUnitPath(unitId, allUnits);
+  const commandedUnit = allUnits.find(u => u.commanderId === user.id.toString());
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[60] p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden transform transition-all" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-slate-100 to-slate-50 p-6 border-b border-slate-200 flex flex-col items-center text-center relative">
+          <button onClick={onClose} className="absolute top-3 right-3 p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200/50 rounded-full transition-colors"><X size={18} /></button>
+          
+          <div className="w-20 h-20 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-2xl border-4 border-white shadow-sm mb-3">
+            {user.full_name?.charAt(0) || <User size={32} />}
+          </div>
+          <h3 className="text-xl font-bold text-slate-800 leading-tight">{user.full_name}</h3>
+          <p className="text-sm text-slate-500 font-medium mt-1">{translateRank(user.rank)}</p>
+        </div>
+        
+        <div className="p-6 space-y-5 bg-white">
+          <div>
+            <div className="text-xs text-slate-400 uppercase font-bold tracking-wider mb-1 flex items-center gap-1.5">
+              <Building2 size={14} /> Место службы
+            </div>
+            <div className="text-sm font-medium text-slate-800">{unitPath}</div>
+          </div>
+          
+          {commandedUnit && (
+            <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
+              <div className="text-xs text-blue-500 uppercase font-bold tracking-wider mb-1 flex items-center gap-1.5">
+                <UserCog size={14} /> Является командиром
+              </div>
+              <div className="text-sm font-medium text-blue-900">{commandedUnit.name}</div>
+            </div>
+          )}
+
+          {user.position && (
+            <div>
+              <div className="text-xs text-slate-400 uppercase font-bold tracking-wider mb-1 flex items-center gap-1.5">
+                <Briefcase size={14} /> Должность
+              </div>
+              <div className="text-sm font-medium text-slate-800">{user.position}</div>
+            </div>
+          )}
+
+          {/* Блок статистики пользователя */}
+          <div className="pt-4 border-t border-slate-100">
+            <div className="text-xs text-slate-400 uppercase font-bold tracking-wider mb-3 flex items-center gap-1.5">
+              <Activity size={14} /> Эффективность
+            </div>
+            
+            {loadingStats ? (
+              <div className="flex justify-center py-6">
+                <RefreshCw size={20} className="animate-spin text-slate-300" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 flex items-center gap-3">
+                  <div className="p-2 bg-blue-100 text-blue-600 rounded-md"><Target size={16} /></div>
+                  <div>
+                    <div className="text-xl font-bold text-slate-800 leading-none">{stats.total}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-1">Всего задач</div>
+                  </div>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 flex items-center gap-3">
+                  <div className="p-2 bg-emerald-100 text-emerald-600 rounded-md"><CheckCircle size={16} /></div>
+                  <div>
+                    <div className="text-xl font-bold text-slate-800 leading-none">{stats.done}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-1">Выполнено</div>
+                  </div>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 flex items-center gap-3">
+                  <div className="p-2 bg-amber-100 text-amber-600 rounded-md"><Clock size={16} /></div>
+                  <div>
+                    <div className="text-xl font-bold text-slate-800 leading-none">{stats.inProgress}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-1">В работе</div>
+                  </div>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 flex items-center gap-3">
+                  <div className="p-2 bg-red-100 text-red-600 rounded-md"><AlertTriangle size={16} /></div>
+                  <div>
+                    <div className="text-xl font-bold text-slate-800 leading-none">{stats.overdue}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-1">Просрочено</div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
