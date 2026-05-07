@@ -13,7 +13,7 @@ from .serializers import (
     TaskCreateSerializer, TaskMoveSerializer,
     TaskAttachmentSerializer, CommentSerializer, CommentCreateSerializer,
     TaskSubmissionSerializer, TaskSubmitSerializer, TaskReviewSerializer,
-    CommentAttachmentSerializer
+    CommentAttachmentSerializer, SubmissionAttachmentSerializer
 )
 from .filters import TaskFilter
 from .permissions import (
@@ -42,18 +42,18 @@ class TaskListCreateView(generics.ListCreateAPIView):
 
         unit_ids = get_units_under_authority(user)
 
-        qs = Task.objects.select_related(
+        qs = Task.objects.filter(is_archived=False).select_related(
             'assigned_to', 'created_by', 'org_unit',
         ).prefetch_related('subtasks', 'attachments', 'comments')
-        if not user.is_authenticated:
-            return Task.objects.none()
+        
         if user.role in ('commander', 'deputy_commander'):
             return qs
-        return qs.filter(
-            Q(assigned_to=user)
-            | Q(created_by=user)
-            | Q(org_unit_id__in=unit_ids)
-        ).distinct()
+
+        visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
+        if hasattr(user, 'org_unit_id') and user.org_unit_id:
+            visibility_q |= Q(org_unit_id=user.org_unit_id)
+
+        return qs.filter(visibility_q).distinct()
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -90,9 +90,13 @@ class TaskMoveView(APIView):
         if serializer.is_valid():
             task.status = serializer.validated_data['status']
             task.order = serializer.validated_data.get('order', task.order)
-            task.save()
+            
+            if 'assigned_to' in request.data:
+                assigned_to_id = request.data.get('assigned_to')
+                task.assigned_to_id = assigned_to_id if assigned_to_id else None
 
-            return Response(TaskListSerializer(task).data)
+            task.save()
+            return Response(TaskListSerializer(task, context={'request': request}).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -105,6 +109,10 @@ class TaskMoveView(APIView):
         unit_ids = get_units_under_authority(user)
         if task.org_unit_id and task.org_unit_id in unit_ids:
             return
+        
+        if task.org_unit_id and hasattr(user, 'org_unit_id') and task.org_unit_id == user.org_unit_id:
+            return
+            
         from rest_framework.exceptions import PermissionDenied
         raise PermissionDenied("У вас нет прав на перемещение этой задачи")
 
@@ -135,13 +143,13 @@ class TaskAttachmentUploadView(APIView):
             uploaded_by=request.user,
         )
         return Response(
-            TaskAttachmentSerializer(attachment).data,
+            TaskAttachmentSerializer(attachment, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
         )
 
     def get(self, request, pk):
         attachments = TaskAttachment.objects.filter(task_id=pk)
-        serializer = TaskAttachmentSerializer(attachments, many=True)
+        serializer = TaskAttachmentSerializer(attachments, many=True, context={'request': request})
         return Response(serializer.data)
 
 
@@ -150,18 +158,19 @@ class KanbanBoardView(APIView):
         user = request.user
         unit_ids = get_units_under_authority(user)
 
+        # ФИКС: Скрываем архивные задачи с доски
         qs = Task.objects.filter(
             parent_task__isnull=True,
+            is_archived=False
         ).select_related(
             'assigned_to', 'created_by', 'org_unit',
         ).prefetch_related('subtasks', 'attachments', 'comments')
 
         if user.role not in ('commander', 'deputy_commander'):
-            qs = qs.filter(
-                Q(assigned_to=user)
-                | Q(created_by=user)
-                | Q(org_unit_id__in=unit_ids)
-            ).distinct()
+            visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
+            if hasattr(user, 'org_unit_id') and user.org_unit_id:
+                visibility_q |= Q(org_unit_id=user.org_unit_id)
+            qs = qs.filter(visibility_q).distinct()
 
         org_unit = request.query_params.get('org_unit')
         if org_unit:
@@ -180,7 +189,7 @@ class KanbanBoardView(APIView):
             tasks = qs.filter(status=status_value).order_by('order', '-priority')
             columns[status_value] = {
                 'label': status_label,
-                'tasks': TaskListSerializer(tasks, many=True).data,
+                'tasks': TaskListSerializer(tasks, many=True, context={'request': request}).data,
                 'count': tasks.count(),
             }
 
@@ -192,14 +201,14 @@ class DashboardStatsView(APIView):
         user = request.user
         unit_ids = get_units_under_authority(user)
 
+        # ФИКС: В статистике тоже не учитываем архив
         if user.role in ('commander', 'deputy_commander'):
-            qs = Task.objects.all()
+            qs = Task.objects.filter(is_archived=False)
         else:
-            qs = Task.objects.filter(
-                Q(assigned_to=user)
-                | Q(created_by=user)
-                | Q(org_unit_id__in=unit_ids)
-            ).distinct()
+            visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
+            if hasattr(user, 'org_unit_id') and user.org_unit_id:
+                visibility_q |= Q(org_unit_id=user.org_unit_id)
+            qs = Task.objects.filter(visibility_q, is_archived=False).distinct()
 
         from datetime import timedelta
 
@@ -245,7 +254,7 @@ class DashboardStatsView(APIView):
             'done_today': done_today,
             'by_priority': by_priority,
             'by_status': by_status,
-            'upcoming_deadlines': TaskListSerializer(upcoming, many=True).data,
+            'upcoming_deadlines': TaskListSerializer(upcoming, many=True, context={'request': request}).data,
             'units_activity': units_stats,
         })
 
@@ -295,14 +304,14 @@ class CommentAttachmentUploadView(APIView):
             uploaded_by=request.user,
         )
         return Response(
-            CommentAttachmentSerializer(attachment).data,
+            CommentAttachmentSerializer(attachment, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
         )
 
     def get(self, request, task_pk, comment_pk):
         comment = get_object_or_404(TaskComment, pk=comment_pk, task_id=task_pk)
         attachments = comment.attachments.all()
-        serializer = CommentAttachmentSerializer(attachments, many=True)
+        serializer = CommentAttachmentSerializer(attachments, many=True, context={'request': request})
         return Response(serializer.data)
 
 
@@ -314,11 +323,11 @@ class TaskSubmitView(APIView):
         task = get_object_or_404(Task, pk=pk)
         serializer = TaskSubmitSerializer(data=request.data)
         if serializer.is_valid():
-            submission, created = TaskSubmission.objects.get_or_create(
-                task=task,
-                defaults={'status': TaskSubmission.Status.PENDING}
-            )
-            submission.status = TaskSubmission.Status.PENDING
+            submission = TaskSubmission.objects.filter(task=task).first()
+            if not submission:
+                submission = TaskSubmission.objects.create(task=task)
+            
+            submission.status = 'pending'
             submission.comment = serializer.validated_data.get('comment', '')
             submission.submitted_at = timezone.now()
             submission.reviewed_by = None
@@ -326,10 +335,10 @@ class TaskSubmitView(APIView):
             submission.review_comment = ''
             submission.save()
 
-            task.status = Task.Status.REVIEW
+            task.status = 'review'
             task.save()
 
-            return Response(TaskDetailSerializer(task).data)
+            return Response(TaskDetailSerializer(task, context={'request': request}).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -340,17 +349,18 @@ class TaskApproveView(APIView):
         task = get_object_or_404(Task, pk=pk)
         serializer = TaskReviewSerializer(data=request.data)
         if serializer.is_valid():
-            submission = get_object_or_404(TaskSubmission, task=task)
-            submission.status = TaskSubmission.Status.APPROVED
-            submission.review_comment = serializer.validated_data.get('comment', '')
-            submission.reviewed_by = request.user
-            submission.reviewed_at = timezone.now()
-            submission.save()
+            submission = TaskSubmission.objects.filter(task=task).first()
+            if submission:
+                submission.status = 'approved'
+                submission.review_comment = serializer.validated_data.get('comment', '')
+                submission.reviewed_by = request.user
+                submission.reviewed_at = timezone.now()
+                submission.save()
 
-            task.status = Task.Status.DONE
+            task.status = 'done'
             task.save()
 
-            return Response(TaskDetailSerializer(task).data)
+            return Response(TaskDetailSerializer(task, context={'request': request}).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -361,17 +371,18 @@ class TaskRejectView(APIView):
         task = get_object_or_404(Task, pk=pk)
         serializer = TaskReviewSerializer(data=request.data)
         if serializer.is_valid():
-            submission = get_object_or_404(TaskSubmission, task=task)
-            submission.status = TaskSubmission.Status.REJECTED
-            submission.review_comment = serializer.validated_data.get('comment', '')
-            submission.reviewed_by = request.user
-            submission.reviewed_at = timezone.now()
-            submission.save()
+            submission = TaskSubmission.objects.filter(task=task).first()
+            if submission:
+                submission.status = 'rejected'
+                submission.review_comment = serializer.validated_data.get('comment', '')
+                submission.reviewed_by = request.user
+                submission.reviewed_at = timezone.now()
+                submission.save()
 
-            task.status = Task.Status.IN_PROGRESS
+            task.status = 'in_progress'
             task.save()
 
-            return Response(TaskDetailSerializer(task).data)
+            return Response(TaskDetailSerializer(task, context={'request': request}).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -380,7 +391,11 @@ class SubmissionAttachmentUploadView(APIView):
 
     def post(self, request, pk):
         task = get_object_or_404(Task, pk=pk)
-        submission = get_object_or_404(TaskSubmission, task=task)
+        
+        submission = TaskSubmission.objects.filter(task=task).first()
+        if not submission:
+            submission = TaskSubmission.objects.create(task=task)
+        
         file = request.FILES.get('file')
         if not file:
             return Response(
@@ -394,9 +409,11 @@ class SubmissionAttachmentUploadView(APIView):
             uploaded_by=request.user,
         )
         return Response(
-            SubmissionAttachmentSerializer(attachment).data,
+            SubmissionAttachmentSerializer(attachment, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+
 class UpdatePlannedTasksView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -404,8 +421,8 @@ class UpdatePlannedTasksView(APIView):
         from datetime import timedelta
         threshold = timezone.now() + timedelta(days=2)
         updated = Task.objects.filter(
-            status=Task.Status.PLANNED,
+            status='planned',
             deadline__lte=threshold,
             deadline__gte=timezone.now()
-        ).update(status=Task.Status.TODO)
+        ).update(status='todo')
         return Response({'updated': updated})

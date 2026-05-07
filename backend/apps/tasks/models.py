@@ -60,10 +60,13 @@ class Task(models.Model):
         related_name='subtasks'
     )
     deadline = models.DateTimeField('Срок выполнения', null=True, blank=True)
-    # Новые поля для мероприятий и диапазонов
     start_date = models.DateTimeField('Дата начала', null=True, blank=True)
     end_date = models.DateTimeField('Дата окончания', null=True, blank=True)
     is_milestone = models.BooleanField('Мероприятие календаря', default=False)
+    
+    # ФИКС: Поле для архивации выполненных задач
+    is_archived = models.BooleanField('В архиве', default=False)
+    
     tags = models.JSONField('Теги', default=list)
     order = models.IntegerField('Порядок', default=0, validators=[MinValueValidator(0)])
     created_at = models.DateTimeField('Создано', auto_now_add=True)
@@ -91,6 +94,7 @@ class Task(models.Model):
             models.Index(fields=['-created_at']),
             models.Index(fields=['start_date']),
             models.Index(fields=['end_date']),
+            models.Index(fields=['is_archived']), # Индекс для быстрого фильтра
         ]
         constraints = [
             models.CheckConstraint(
@@ -104,7 +108,6 @@ class Task(models.Model):
 
 
 class AbstractAttachment(models.Model):
-    """Абстрактная базовая модель для всех вложений в системе."""
     filename = models.CharField('Имя файла', max_length=255)
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -127,8 +130,6 @@ class TaskAttachment(AbstractAttachment):
         verbose_name='Задача'
     )
     file = models.FileField('Файл', upload_to='task_attachments/%Y/%m/%d/')
-
-    # Переопределяем related_name для пользователя, чтобы избежать конфликтов
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -151,7 +152,6 @@ class TaskAttachment(AbstractAttachment):
 
 
 class TaskComment(models.Model):
-    """Комментарий к задаче."""
     task = models.ForeignKey(
         Task,
         on_delete=models.CASCADE,
@@ -179,7 +179,6 @@ class TaskComment(models.Model):
 
 
 class CommentAttachment(AbstractAttachment):
-    """Вложение к комментарию."""
     comment = models.ForeignKey(
         TaskComment,
         on_delete=models.CASCADE,
@@ -205,7 +204,6 @@ class CommentAttachment(AbstractAttachment):
 
 
 class TaskSubmission(models.Model):
-    """Сдача задания."""
     class Status(models.TextChoices):
         PENDING = 'pending', 'На проверке'
         APPROVED = 'approved', 'Принято'
@@ -245,7 +243,6 @@ class TaskSubmission(models.Model):
 
 
 class SubmissionAttachment(AbstractAttachment):
-    """Вложение к сдаче задания."""
     submission = models.ForeignKey(
         TaskSubmission,
         on_delete=models.CASCADE,

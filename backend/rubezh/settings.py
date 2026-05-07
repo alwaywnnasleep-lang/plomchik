@@ -16,8 +16,8 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-your-secret-key-here-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', '1') == '1'
 
-# Исправлено: объединение хостов без дублирования
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,web,frontend').split(',')
+# Объединение хостов без дублирования
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,web,frontend,*').split(',')
 
 # Application definition
 INSTALLED_APPS = [
@@ -49,6 +49,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # CorsMiddleware ДОЛЖЕН БЫТЬ ПЕРВЫМ
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -141,19 +142,12 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-# CORS settings
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://frontend:5173",
-    "http://localhost",
-    "http://127.0.0.1",
-    "http://localhost:80",
-    "http://localhost:8000",
-]
-
-# Важно: разрешаем передачу куки и заголовков при загрузке файлов
+# ========== НАСТРОЙКИ CORS (Безотказный вариант для разработки) ==========
+# Разрешаем все домены фронтенда на время разработки
+CORS_ALLOW_ALL_ORIGINS = True
+# Обязательно для передачи токенов/сессий
 CORS_ALLOW_CREDENTIALS = True
+# =========================================================================
 
 # ========== ИСПРАВЛЕНИЕ ДЛЯ ПРЕДПРОСМОТРА В FIREFOX ==========
 # Разрешаем встраивание PDF и изображений в iframe внутри одного домена

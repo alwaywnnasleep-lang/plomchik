@@ -20,3 +20,20 @@ def move_planned_to_todo():
     if updated:
         logger.info(f'Moved {updated} planned tasks to todo')
     return updated
+
+@shared_task
+def archive_completed_tasks():
+    """Переводит выполненные задачи в архив через 3 дня после сдачи"""
+    threshold = timezone.now() - timedelta(days=3)
+    
+    tasks_to_archive = Task.objects.filter(
+        status=Task.Status.DONE,
+        updated_at__lte=threshold,
+        is_archived=False
+    )
+    
+    archived_count = tasks_to_archive.update(is_archived=True)
+    if archived_count > 0:
+        logger.info(f'Автоматически отправлено в архив задач: {archived_count}')
+        
+    return archived_count

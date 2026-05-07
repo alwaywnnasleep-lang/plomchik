@@ -3,7 +3,7 @@ import {
   GripVertical, Calendar, Plus, X, AlertTriangle,
   Filter, Tag, MessageCircle, Send, Paperclip,
   Image, FileText, Download, Edit2, Trash2,
-  Clock, CheckCircle, Upload, Paperclip as PaperclipIcon
+  CheckCircle, Upload, Paperclip as PaperclipIcon, UserPlus, Users, RefreshCw
 } from 'lucide-react';
 import type { Task, TaskStatus, Priority, Comment, User as UserType, TaskFile, TaskSubmission } from '@/types';
 import { cn } from '@/utils/cn';
@@ -92,7 +92,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
       } catch (error) {
         console.error('Failed to move task:', error);
         onTasksChange(tasks);
-        alert('Ошибка при перемещении задачи');
+        alert('Ошибка при перемещении задачи. Возможно, у вас нет прав на этот статус.');
       }
       setDraggedTask(null);
     }
@@ -123,7 +123,6 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
       }
 
       const createdTask = await api.createTask(taskData);
-      console.log('✅ Задача создана:', createdTask);
 
       if (!createdTask || !createdTask.id) {
         throw new Error('Сервер не вернул ID задачи');
@@ -294,7 +293,6 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
             } catch (error: any) {
               console.error('Failed to delete task:', error);
               if (error.message?.includes('No Task matches')) {
-                // Если задача не найдена на сервере, удаляем её локально
                 onTasksChange(tasks.filter(t => t.id !== id));
                 setSelectedTask(null);
               } else {
@@ -324,6 +322,7 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
   const subtasksTotal = task.subtasks?.length ?? 0;
   const commentsCount = task.comments?.length || 0;
   const attachmentsCount = task.attachments?.length || 0;
+  const isUnassigned = !task.assigneeId;
 
   const getAssigneeInitials = () => {
     if (!assignee) return '';
@@ -344,7 +343,7 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
     if (!task.submission) return null;
     switch (task.submission.status) {
       case 'approved': return 'Принято';
-      case 'rejected': return 'Отклонено';
+      case 'rejected': return 'Доработка';
       default: return 'На проверке';
     }
   };
@@ -354,7 +353,10 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
       draggable
       onDragStart={onDragStart}
       onClick={onClick}
-      className="bg-white rounded-lg border border-slate-200 p-3 cursor-pointer hover:shadow-md hover:border-slate-300 transition-all group"
+      className={cn(
+        "bg-white rounded-lg border p-3 cursor-pointer hover:shadow-md transition-all group",
+        isUnassigned ? "border-dashed border-slate-400 bg-slate-50/80" : "border-slate-200 hover:border-slate-300"
+      )}
     >
       <div className="flex items-start gap-2">
         <GripVertical size={14} className="text-slate-300 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
@@ -367,6 +369,11 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700 flex items-center gap-0.5">
                 <AlertTriangle size={8} /> Просрочено
               </span>
+            )}
+            {isUnassigned && (
+               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 flex items-center gap-0.5">
+                 <UserPlus size={8} /> Свободная
+               </span>
             )}
           </div>
 
@@ -416,10 +423,7 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
               <Calendar size={10} />
               <span className={isOverdue ? 'text-red-500 font-medium' : ''}>
                 {new Date(task.deadline).toLocaleString('ru-RU', {
-                  day: '2-digit',
-                  month: '2-digit',
-                  hour: '2-digit',
-                  minute: '2-digit'
+                  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
                 })}
               </span>
             </div>
@@ -427,14 +431,12 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
             <div className="flex items-center gap-1.5">
               {attachmentsCount > 0 && (
                 <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
-                  <PaperclipIcon size={10} />
-                  {attachmentsCount}
+                  <PaperclipIcon size={10} /> {attachmentsCount}
                 </span>
               )}
               {commentsCount > 0 && (
                 <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
-                  <MessageCircle size={10} />
-                  {commentsCount}
+                  <MessageCircle size={10} /> {commentsCount}
                 </span>
               )}
               {unit && (
@@ -442,401 +444,23 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
                   {unit.name}
                 </span>
               )}
-              {assignee && (
+              {assignee ? (
                 <div
                   className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[8px] font-bold"
                   style={{ backgroundColor: `hsl(${parseInt(assignee.id.toString()) * 100 % 360}, 70%, 50%)` }}
-                  title={`${assignee.rank} ${assignee.fullName || ''}`}
+                  title={`${assignee.rank || ''} ${assignee.fullName || ''}`}
                 >
                   {getAssigneeInitials()}
+                </div>
+              ) : (
+                <div className="w-5 h-5 rounded-full border border-dashed border-slate-400 flex items-center justify-center bg-slate-50 text-slate-400" title="Никто не назначен">
+                  <UserPlus size={10} />
                 </div>
               )}
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ========== TaskSubmission Component ==========
-function TaskSubmission({ task, onTaskUpdate }: {
-  task: Task;
-  onTaskUpdate: (updatedTask: Task) => void;
-}) {
-  const { user } = useAuth();
-  const [files, setFiles] = useState<File[]>([]);
-  const [comment, setComment] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [reviewComment, setReviewComment] = useState('');
-  const [reviewFiles, setReviewFiles] = useState<File[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const reviewFileInputRef = useRef<HTMLInputElement>(null);
-
-  const isAssignee = user?.id.toString() === task.assigneeId;
-  const isCreator = user?.id.toString() === task.creatorId;
-  const isCommanderOrDeputy = user?.role === 'commander' || user?.role === 'deputy_commander';
-  const isUnitHead = user?.role === 'department_head' || user?.role === 'group_head';
-  const isHeadOfTaskUnit = isUnitHead && user?.org_unit?.toString() === task.unitId;
-
-  const canSubmit = isAssignee && task.status === 'in_progress';
-  const canReview = (isCreator || isCommanderOrDeputy || isHeadOfTaskUnit) && task.status === 'review';
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || []);
-    setFiles(prev => [...prev, ...selectedFiles]);
-  };
-
-  const removeFile = (index: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleReviewFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || []);
-    setReviewFiles(prev => [...prev, ...selectedFiles]);
-  };
-
-  const removeReviewFile = (index: number) => {
-    setReviewFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleSubmit = async () => {
-    if (!canSubmit) return;
-
-    if (task.submission && task.submission.status === 'pending') {
-      alert('Задание уже на проверке');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const uploadedFiles: TaskFile[] = [];
-      for (const file of files) {
-        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
-        uploadedFiles.push(uploaded);
-      }
-
-      const submission = await api.submitTask(parseInt(task.id), comment);
-
-      const updatedTask = {
-        ...task,
-        status: 'review' as TaskStatus,
-        submission: {
-          ...submission,
-          files: uploadedFiles,
-          status: 'pending' as const,
-        } as TaskSubmission,
-      };
-
-      onTaskUpdate(updatedTask);
-      setFiles([]);
-      setComment('');
-    } catch (error) {
-      console.error('Failed to submit task:', error);
-      alert('Ошибка при сдаче задания');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleApprove = async () => {
-    if (!canReview) return;
-
-    if (!task.submission) {
-      alert('Сначала необходимо отправить задание на проверку');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const uploadedFiles: TaskFile[] = [];
-      for (const file of reviewFiles) {
-        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
-        uploadedFiles.push(uploaded);
-      }
-
-      await api.approveTask(parseInt(task.id), reviewComment);
-
-      const updatedTask = {
-        ...task,
-        status: 'done' as TaskStatus,
-        submission: task.submission ? {
-          ...task.submission,
-          status: 'approved' as const,
-          reviewedBy: user?.id.toString(),
-          reviewedAt: new Date().toISOString(),
-          reviewComment,
-          reviewFiles: uploadedFiles,
-        } : undefined,
-      };
-
-      onTaskUpdate(updatedTask);
-      setReviewComment('');
-      setReviewFiles([]);
-    } catch (error) {
-      console.error('Failed to approve task:', error);
-      alert('Ошибка при подтверждении');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleReject = async () => {
-    if (!canReview || !reviewComment) {
-      alert('Укажите причину отклонения');
-      return;
-    }
-
-    if (!task.submission) {
-      alert('Сначала необходимо отправить задание на проверку');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const uploadedFiles: TaskFile[] = [];
-      for (const file of reviewFiles) {
-        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
-        uploadedFiles.push(uploaded);
-      }
-
-      await api.rejectTask(parseInt(task.id), reviewComment);
-
-      const updatedTask = {
-        ...task,
-        status: 'in_progress' as TaskStatus,
-        submission: task.submission ? {
-          ...task.submission,
-          status: 'rejected' as const,
-          reviewedBy: user?.id.toString(),
-          reviewedAt: new Date().toISOString(),
-          reviewComment,
-          reviewFiles: uploadedFiles,
-        } : undefined,
-      };
-
-      onTaskUpdate(updatedTask);
-      setReviewComment('');
-      setReviewFiles([]);
-    } catch (error) {
-      console.error('Failed to reject task:', error);
-      alert('Ошибка при отклонении');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  };
-
-  const renderFileList = (files: TaskFile[] | File[], onRemove?: (index: number) => void, isEditable = false) => {
-    return (
-      <div className="space-y-2">
-        {files.map((file, index) => {
-          const isTaskFile = 'fileName' in file;
-          const fileName = isTaskFile ? (file.fileName || file.filename || 'Файл') : (file.name || 'Файл');
-          const fileSize = isTaskFile ? undefined : file.size;
-          const fileUrl = isTaskFile ? (file.fileUrl || file.file) : URL.createObjectURL(file);
-          return (
-            <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
-              {fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i) ? (
-                <Image size={16} className="text-slate-400" />
-              ) : (
-                <FileText size={16} className="text-slate-400" />
-              )}
-              <span className="text-sm text-slate-600 flex-1 truncate">{fileName}</span>
-              {fileSize && <span className="text-xs text-slate-400">{formatFileSize(fileSize)}</span>}
-              {fileUrl && (
-                <a href={fileUrl} download={fileName} className="p-1 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
-                  <Download size={14} className="text-slate-500" />
-                </a>
-              )}
-              {onRemove && isEditable && (
-                <button
-                  onClick={() => onRemove(index)}
-                  className="p-1 hover:bg-slate-200 rounded"
-                >
-                  <X size={14} className="text-slate-500" />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  return (
-    <div className="mt-6 border-t border-slate-200 pt-4">
-      <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-        <CheckCircle size={16} className="text-green-700" />
-        Выполнение задания
-      </h3>
-
-      {task.submission && (
-        <div className={cn(
-          'mb-4 p-3 rounded-lg border',
-          task.submission.status === 'approved' ? 'bg-green-50 border-green-200' :
-          task.submission.status === 'rejected' ? 'bg-red-50 border-red-200' :
-          'bg-yellow-50 border-yellow-200'
-        )}>
-          <div className="flex items-center gap-2 mb-2">
-            {task.submission.status === 'approved' ? (
-              <CheckCircle size={16} className="text-green-700" />
-            ) : task.submission.status === 'rejected' ? (
-              <AlertTriangle size={16} className="text-red-700" />
-            ) : (
-              <Send size={16} className="text-yellow-700" />
-            )}
-            <span className="text-sm font-medium">
-              {task.submission.status === 'approved' ? 'Принято' :
-               task.submission.status === 'rejected' ? 'Отклонено' : 'На проверке'}
-            </span>
-          </div>
-
-          {task.submission.comment && (
-            <div className="mt-2">
-              <p className="text-sm text-slate-600">{task.submission.comment}</p>
-            </div>
-          )}
-
-          {task.submission.files && task.submission.files.length > 0 && (
-            <div className="mt-2">
-              <div className="text-xs font-medium text-slate-500 mb-1">Прикреплённые файлы:</div>
-              {renderFileList(task.submission.files)}
-            </div>
-          )}
-
-          {task.submission.reviewComment && (
-            <div className="mt-2 p-2 bg-white rounded text-sm">
-              <span className="font-medium">Комментарий проверяющего:</span>
-              <p className="text-slate-600 mt-1">{task.submission.reviewComment}</p>
-            </div>
-          )}
-
-          {task.submission.reviewFiles && task.submission.reviewFiles.length > 0 && (
-            <div className="mt-2">
-              <div className="text-xs font-medium text-slate-500 mb-1">Файлы проверяющего:</div>
-              {renderFileList(task.submission.reviewFiles)}
-            </div>
-          )}
-        </div>
-      )}
-
-      {canSubmit && (
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-slate-600">Прикрепить файлы к выполнению</label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
-              >
-                <Upload size={14} />
-                Выбрать файлы
-              </button>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileSelect}
-                className="hidden"
-                multiple
-              />
-            </div>
-            {files.length > 0 && (
-              <div className="mt-2">
-                {renderFileList(files, removeFile, true)}
-              </div>
-            )}
-          </div>
-
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Добавьте комментарий к выполненному заданию..."
-            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
-            rows={3}
-          />
-
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || files.length === 0}
-            className="w-full py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {submitting ? 'Отправка...' : (
-              <>
-                <Send size={16} />
-                Отправить на проверку
-              </>
-            )}
-          </button>
-        </div>
-      )}
-
-      {canReview && task.status === 'review' && (
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-slate-600">Прикрепить файлы (необязательно)</label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => reviewFileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
-              >
-                <Upload size={14} />
-                Выбрать файлы
-              </button>
-              <input
-                type="file"
-                ref={reviewFileInputRef}
-                onChange={handleReviewFileSelect}
-                className="hidden"
-                multiple
-              />
-            </div>
-            {reviewFiles.length > 0 && (
-              <div className="mt-2">
-                {renderFileList(reviewFiles, removeReviewFile, true)}
-              </div>
-            )}
-          </div>
-
-          <textarea
-            value={reviewComment}
-            onChange={(e) => setReviewComment(e.target.value)}
-            placeholder="Комментарий к проверке..."
-            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
-            rows={3}
-          />
-
-          <div className="flex gap-2">
-            <button
-              onClick={handleApprove}
-              disabled={submitting}
-              className="flex-1 py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <CheckCircle size={16} />
-              Принять
-            </button>
-            <button
-              onClick={handleReject}
-              disabled={submitting}
-              className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <X size={16} />
-              Отклонить
-            </button>
-          </div>
-        </div>
-      )}
-
-      {task.status !== 'in_progress' && task.status !== 'review' && !task.submission && (
-        <p className="text-sm text-slate-500 italic">
-          Задача ещё не в работе или уже выполнена.
-        </p>
-      )}
     </div>
   );
 }
@@ -854,11 +478,28 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
   const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'submission' | 'attachments'>('details');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [comments, setComments] = useState<Comment[]>(task.comments || []);
+  const [isAssigning, setIsAssigning] = useState(false);
 
   const assignee = users.find(u => u.id.toString() === task.assigneeId);
   const creator = users.find(u => u.id.toString() === task.creatorId);
   const unit = units.find(u => u.id.toString() === task.unitId);
   const pConfig = priorityConfig[task.priority];
+
+  const isLeader = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(currentUser?.role || '');
+  const isCreator = currentUser?.id.toString() === task.creatorId?.toString();
+  const isAssignee = currentUser?.id.toString() === task.assigneeId?.toString();
+  const isMemberOfTaskUnit = currentUser?.org_unit?.toString() === task.unitId?.toString();
+  const isUnassigned = !task.assigneeId;
+  const canClaim = isUnassigned && isMemberOfTaskUnit;
+  const unitUsers = users.filter(u => u.org_unit?.toString() === task.unitId?.toString());
+
+  const allowedStatuses = columns.filter(col => {
+    if (isLeader || isCreator) return true;
+    if (isAssignee) {
+      return ['todo', 'in_progress'].includes(col.id); 
+    }
+    return false;
+  });
 
   const handleAddComment = (newComment: Comment) => {
     const updatedComments = [...comments, newComment];
@@ -878,6 +519,28 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
     );
     setComments(updatedComments);
     onUpdate({ ...task, comments: updatedComments });
+  };
+
+  const handleClaimOrAssign = async (userId: string) => {
+    setIsAssigning(true);
+    try {
+      await api.updateTask(parseInt(task.id), { 
+        assigned_to: userId ? parseInt(userId) : null,
+        status: 'in_progress' 
+      });
+      
+      const updatedTask = {
+         ...task,
+         assigneeId: userId,
+         status: 'in_progress' as TaskStatus 
+      };
+      onUpdate(updatedTask);
+    } catch (e) {
+      console.error(e);
+      alert('Ошибка при назначении задачи');
+    } finally {
+      setIsAssigning(false);
+    }
   };
 
   const getAssigneeFullName = (user: any) => {
@@ -935,14 +598,12 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             </button>
           </div>
 
-          <div className="flex gap-4 mt-4">
+          <div className="flex gap-4 mt-4 overflow-x-auto no-scrollbar">
             <button
               onClick={() => setActiveTab('details')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative',
-                activeTab === 'details'
-                  ? 'text-green-700 border-b-2 border-green-700'
-                  : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-sm font-medium transition-colors relative whitespace-nowrap',
+                activeTab === 'details' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
               )}
             >
               Детали
@@ -950,10 +611,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('comments')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1',
-                activeTab === 'comments'
-                  ? 'text-green-700 border-b-2 border-green-700'
-                  : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1 whitespace-nowrap',
+                activeTab === 'comments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
               )}
             >
               Обсуждение
@@ -966,10 +625,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('attachments')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1',
-                activeTab === 'attachments'
-                  ? 'text-green-700 border-b-2 border-green-700'
-                  : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1 whitespace-nowrap',
+                activeTab === 'attachments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
               )}
             >
               <PaperclipIcon size={16} />
@@ -983,10 +640,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('submission')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1',
-                activeTab === 'submission'
-                  ? 'text-green-700 border-b-2 border-green-700'
-                  : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1 whitespace-nowrap',
+                activeTab === 'submission' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
               )}
             >
               <CheckCircle size={16} />
@@ -1014,27 +669,61 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Исполнитель</div>
-                  <div className="flex items-center gap-2">
-                    {assignee ? (
-                      <>
-                        <div
-                          className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
-                          style={{ backgroundColor: `hsl(${parseInt(assignee.id.toString()) * 100 % 360}, 70%, 50%)` }}
-                        >
-                          {getAssigneeInitials(assignee)}
+                  
+                  {isLeader ? (
+                    <div className="space-y-2">
+                      <select 
+                        disabled={isAssigning}
+                        value={task.assigneeId || ''}
+                        onChange={(e) => handleClaimOrAssign(e.target.value)} 
+                        className="text-sm border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-green-700/30 outline-none w-full bg-slate-50 hover:bg-white transition-colors"
+                      >
+                        <option value="">Не назначен (Свободная)</option>
+                        {unitUsers.map(u => (
+                          <option key={u.id} value={u.id.toString()}>
+                            {u.rank} {getAssigneeFullName(u)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-slate-400 italic">Командир может назначать любого сотрудника группы</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {assignee ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-green-700 flex items-center justify-center text-white text-xs font-bold shadow-sm">
+                            {getAssigneeInitials(assignee)}
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium text-slate-700">{getAssigneeFullName(assignee)}</div>
+                            <div className="text-[10px] text-slate-400">{assignee.rank}</div>
+                          </div>
                         </div>
-                        <span className="text-sm text-slate-700">{assignee.rank} {getAssigneeFullName(assignee)}</span>
-                      </>
-                    ) : (
-                      <span className="text-sm text-slate-500">Не назначен</span>
-                    )}
-                  </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="text-sm text-slate-500 flex items-center gap-2 bg-white p-2 rounded-lg border border-dashed border-slate-300">
+                            <AlertTriangle size={16} className="text-amber-500" />
+                            Свободная задача
+                          </div>
+                          {canClaim && (
+                             <button 
+                               disabled={isAssigning}
+                               onClick={() => handleClaimOrAssign(currentUser.id.toString())}
+                               className="w-full text-sm bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-800 transition-all font-medium flex items-center justify-center gap-2 shadow-sm"
+                             >
+                               <UserPlus size={16} /> Взять в работу
+                             </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>
                   <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Постановщик</div>
                   <div className="flex items-center gap-2">
-                    {creator && (
+                    {creator ? (
                       <>
                         <div
                           className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
@@ -1044,25 +733,27 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                         </div>
                         <span className="text-sm text-slate-700">{creator.rank} {getAssigneeFullName(creator)}</span>
                       </>
-                    )}
+                    ) : <span className="text-sm text-slate-500">Система</span>}
                   </div>
                 </div>
 
                 <div>
                   <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Подразделение</div>
-                  <span className="text-sm text-slate-700">{unit?.name || '—'}</span>
+                  <span className="text-sm text-slate-700 font-medium flex items-center gap-1.5">
+                    <Users size={14} className="text-slate-400" />
+                    {unit?.name || '—'}
+                  </span>
                 </div>
 
                 <div>
                   <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Дедлайн</div>
-                  <span className="text-sm text-slate-700 flex items-center gap-1">
+                  <span className={cn(
+                    "text-sm font-semibold flex items-center gap-1.5",
+                    new Date(task.deadline) < new Date() && task.status !== 'done' ? "text-red-600" : "text-slate-700"
+                  )}>
                     <Calendar size={12} />
                     {new Date(task.deadline).toLocaleString('ru-RU', {
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
+                      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
                     })}
                   </span>
                 </div>
@@ -1104,25 +795,27 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 </div>
               )}
 
-              <div>
-                <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Статус</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {columns.map(col => (
-                    <button
-                      key={col.id}
-                      onClick={() => onUpdate({ ...task, status: col.id })}
-                      className={cn(
-                        'text-xs px-2.5 py-1 rounded-lg border transition-colors',
-                        task.status === col.id
-                          ? 'border-green-700 bg-green-50 text-green-700 font-medium'
-                          : 'border-slate-200 text-slate-500 hover:bg-slate-50'
-                      )}
-                    >
-                      {col.label}
-                    </button>
-                  ))}
+              {allowedStatuses.length > 0 && (
+                <div className="mt-6 border-t border-slate-100 pt-4">
+                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Изменить статус вручную</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {allowedStatuses.map(col => (
+                      <button
+                        key={col.id}
+                        onClick={() => onUpdate({ ...task, status: col.id })}
+                        className={cn(
+                          'text-xs px-2.5 py-1 rounded-lg border transition-colors',
+                          task.status === col.id
+                            ? 'border-green-700 bg-green-50 text-green-700 font-medium'
+                            : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                        )}
+                      >
+                        {col.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -1162,24 +855,26 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 <span className="text-xs text-red-600">Удалить задачу?</span>
                 <button
                   onClick={() => onDelete(task.id)}
-                  className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+                  className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
                 >
                   Да
                 </button>
                 <button
                   onClick={() => setShowConfirmDelete(false)}
-                  className="text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"
+                  className="text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50 transition-colors"
                 >
                   Нет
                 </button>
               </div>
             ) : (
-              <button
-                onClick={() => setShowConfirmDelete(true)}
-                className="text-xs text-red-500 hover:text-red-700"
-              >
-                Удалить
-              </button>
+              isLeader && (
+                <button
+                  onClick={() => setShowConfirmDelete(true)}
+                  className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 transition-colors"
+                >
+                  <Trash2 size={12} /> Удалить
+                </button>
+              )
             )}
           </div>
         </div>
@@ -1202,6 +897,7 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
   const [editText, setEditText] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const commentsEndRef = useRef<HTMLDivElement>(null);
 
@@ -1209,29 +905,45 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
     commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [comments]);
 
-  const handleSendComment = () => {
+  const handleSendComment = async () => {
     if (!newComment.trim() && attachments.length === 0) return;
+    setIsSending(true);
 
-    const newCommentObj: Comment = {
-      id: uuidv4(),
-      taskId,
-      userId: currentUser?.id.toString() || '',
-      userFullName: currentUser?.fullName || currentUser?.full_name || '',
-      userRank: currentUser?.rank || '',
-      text: newComment,
-      createdAt: new Date().toISOString(),
-      attachments: attachments.map(f => ({
-        id: uuidv4(),
-        url: URL.createObjectURL(f),
-        name: f.name,
-        type: f.type,
-      })),
-    };
+    try {
+      const createdComment = await api.addComment(taskId, newComment);
 
-    onAddComment(newCommentObj);
-    setNewComment('');
-    setAttachments([]);
-    setShowAttachmentMenu(false);
+      const uploadedAttachments = [];
+      for (const file of attachments) {
+        const uploaded = await api.uploadCommentFile(taskId, createdComment.id, file);
+        uploadedAttachments.push(uploaded);
+      }
+
+      const newCommentObj: Comment = {
+        id: createdComment.id.toString(),
+        taskId,
+        userId: currentUser?.id.toString() || '',
+        userFullName: currentUser?.fullName || currentUser?.full_name || '',
+        userRank: currentUser?.rank || '',
+        text: createdComment.text,
+        createdAt: createdComment.created_at || new Date().toISOString(),
+        attachments: uploadedAttachments.map((att: any) => ({
+          id: att.id.toString(),
+          url: att.file || att.fileUrl,
+          name: att.filename || att.fileName,
+          type: (att.filename || '').endsWith('jpg') ? 'image/jpeg' : 'application/pdf',
+        })),
+      };
+
+      onAddComment(newCommentObj);
+      setNewComment('');
+      setAttachments([]);
+      setShowAttachmentMenu(false);
+    } catch (error) {
+      console.error('Ошибка отправки комментария:', error);
+      alert('Не удалось отправить комментарий');
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1272,11 +984,7 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('ru-RU', {
-      day: '2-digit',
-      month: '2-digit',
-      year: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
+      day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
     });
   };
 
@@ -1458,7 +1166,7 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
 
             <button
               onClick={handleSendComment}
-              disabled={!newComment.trim() && attachments.length === 0}
+              disabled={isSending || (!newComment.trim() && attachments.length === 0)}
               className="p-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               title="Отправить"
             >
@@ -1479,6 +1187,307 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
       <div className="text-[10px] text-slate-400">
         Enter для отправки • Shift+Enter для новой строки
       </div>
+    </div>
+  );
+}
+
+// ========== TaskSubmission Component ==========
+function TaskSubmission({ task, onTaskUpdate }: {
+  task: Task;
+  onTaskUpdate: (updatedTask: Task) => void;
+}) {
+  const { user } = useAuth();
+  const [files, setFiles] = useState<File[]>([]);
+  const [comment, setComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewFiles, setReviewFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const reviewFileInputRef = useRef<HTMLInputElement>(null);
+
+  const isAssignee = user?.id.toString() === task.assigneeId?.toString();
+  const isCreator = user?.id.toString() === task.creatorId?.toString();
+  const isCommander = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(user?.role || '');
+  
+  const canSubmit = isAssignee && (task.status === 'in_progress' || task.status === 'todo');
+  const canReview = (isCreator || isCommander) && task.status === 'review';
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    setFiles(prev => [...prev, ...selectedFiles]);
+  };
+
+  const removeFile = (index: number) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleReviewFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    setReviewFiles(prev => [...prev, ...selectedFiles]);
+  };
+
+  const removeReviewFile = (index: number) => {
+    setReviewFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      await api.submitTask(parseInt(task.id), comment);
+
+      const uploadedFiles: TaskFile[] = [];
+      for (const file of files) {
+        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
+        uploadedFiles.push(uploaded);
+      }
+
+      const updatedTask = {
+        ...task,
+        status: 'review' as TaskStatus,
+        submission: {
+          status: 'pending' as const,
+          comment,
+          files: uploadedFiles,
+          submitted_at: new Date().toISOString()
+        } as any
+      };
+
+      onTaskUpdate(updatedTask);
+      setFiles([]);
+      setComment('');
+    } catch (error) {
+      console.error('Failed to submit task:', error);
+      alert('Ошибка при отправке отчета');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    setSubmitting(true);
+    try {
+      await api.updateTask(parseInt(task.id), { status: 'in_progress' });
+      
+      const updatedTask = {
+        ...task,
+        status: 'in_progress' as TaskStatus
+      };
+      
+      onTaskUpdate(updatedTask);
+    } catch (error) {
+      console.error(error);
+      alert('Не удалось отозвать задание.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReviewAction = async (approve: boolean) => {
+    if (!canReview) return;
+    setSubmitting(true);
+    try {
+      if (approve) {
+        await api.approveTask(parseInt(task.id), reviewComment);
+      } else {
+        await api.rejectTask(parseInt(task.id), reviewComment);
+      }
+
+      const uploadedFiles: TaskFile[] = [];
+      for (const file of reviewFiles) {
+        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
+        uploadedFiles.push(uploaded);
+      }
+
+      const updatedTask = {
+        ...task,
+        status: (approve ? 'done' : 'in_progress') as TaskStatus,
+        submission: task.submission ? {
+          ...task.submission,
+          status: approve ? 'approved' : 'rejected',
+          reviewComment,
+          reviewedAt: new Date().toISOString()
+        } : undefined as any
+      };
+
+      onTaskUpdate(updatedTask);
+      setReviewComment('');
+      setReviewFiles([]);
+    } catch (error) {
+      alert('Ошибка при сохранении решения');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const renderFileList = (files: TaskFile[] | File[], onRemove?: (index: number) => void, isEditable = false) => {
+    return (
+      <div className="space-y-2">
+        {files.map((file, index) => {
+          const isTaskFile = 'fileName' in file;
+          const fileName = isTaskFile ? (file.fileName || file.filename || 'Файл') : (file.name || 'Файл');
+          const fileSize = isTaskFile ? undefined : file.size;
+          const fileUrl = isTaskFile ? (file.fileUrl || file.file) : URL.createObjectURL(file);
+          return (
+            <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+              {fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i) ? (
+                <Image size={16} className="text-slate-400" />
+              ) : (
+                <FileText size={16} className="text-slate-400" />
+              )}
+              <span className="text-sm text-slate-600 flex-1 truncate">{fileName}</span>
+              {fileSize && <span className="text-xs text-slate-400">{formatFileSize(fileSize)}</span>}
+              {fileUrl && (
+                <a href={fileUrl} download={fileName} className="p-1 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
+                  <Download size={14} className="text-slate-500" />
+                </a>
+              )}
+              {onRemove && isEditable && (
+                <button
+                  onClick={() => onRemove(index)}
+                  className="p-1 hover:bg-slate-200 rounded"
+                >
+                  <X size={14} className="text-slate-500" />
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+        <CheckCircle size={18} className="text-green-700" />
+        <h3 className="font-bold text-slate-800">Результаты работы</h3>
+      </div>
+
+      {task.submission && (
+        <div className={cn(
+          'p-4 rounded-2xl border-l-4',
+          task.submission.status === 'approved' ? 'bg-green-50 border-green-500' :
+          task.submission.status === 'rejected' ? 'bg-red-50 border-red-500' :
+          'bg-amber-50 border-amber-500'
+        )}>
+          <div className="flex items-center justify-between mb-3">
+             <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий статус отчета</span>
+             <span className="text-xs font-medium px-2 py-1 rounded-full bg-white border border-slate-100 shadow-sm">
+               {task.submission.status === 'approved' ? '✅ Принят' :
+                task.submission.status === 'rejected' ? '❌ Возвращен' : '⏳ Ожидает проверки'}
+             </span>
+          </div>
+
+          <p className="text-sm text-slate-700 bg-white/50 p-3 rounded-xl mb-3 border border-white/50">
+            {task.submission.comment || 'Без комментария'}
+          </p>
+
+          {task.submission.files && task.submission.files.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {task.submission.files.map((f: any) => (
+                <a key={f.id} href={f.file || f.fileUrl} target="_blank" className="flex items-center gap-2 p-2 bg-white rounded-lg border border-slate-100 hover:border-blue-300 transition-all">
+                  <FileText size={14} className="text-blue-500" />
+                  <span className="text-xs truncate flex-1">{f.filename || f.fileName || 'Документ'}</span>
+                  <Download size={12} className="text-slate-400" />
+                </a>
+              ))}
+            </div>
+          )}
+
+          {task.submission.reviewComment && (
+            <div className="mt-3 p-3 bg-white border border-slate-100 rounded-lg text-sm shadow-sm">
+              <span className="font-semibold text-slate-700 block mb-1">Вердикт проверяющего:</span>
+              <p className="text-slate-600">{task.submission.reviewComment}</p>
+            </div>
+          )}
+          
+          {isAssignee && task.status === 'review' && (
+             <div className="mt-4 pt-4 border-t border-amber-200">
+               <button
+                 onClick={handleWithdraw}
+                 disabled={submitting}
+                 className="w-full py-2 bg-white border border-amber-300 text-amber-700 rounded-xl hover:bg-amber-100 transition-all font-medium flex items-center justify-center gap-2"
+               >
+                 <RefreshCw size={16} /> Отозвать с проверки для редактирования
+               </button>
+             </div>
+          )}
+        </div>
+      )}
+
+      {canSubmit && (
+        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 shadow-inner">
+          <label className="block text-xs font-bold text-slate-500 uppercase mb-3">Прикрепить отчетные документы</label>
+          <div className="flex gap-2 mb-4">
+             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition-all text-sm font-medium">
+               <Upload size={16} /> Выбрать файлы
+             </button>
+             <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" multiple />
+          </div>
+
+          {files.length > 0 && (
+            <div className="mb-4 space-y-1">
+              {files.map((f, i) => (
+                <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg text-xs border border-slate-100">
+                  <span className="truncate pr-4">{f.name}</span>
+                  <button onClick={() => removeFile(i)} className="text-red-500 hover:bg-red-50 p-1 rounded"><X size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Напишите краткий комментарий к выполненной работе..."
+            className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-4 focus:ring-green-700/10 focus:border-green-700 outline-none transition-all h-24 mb-4"
+          />
+
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || (files.length === 0 && !comment.trim())}
+            className="w-full py-3 bg-green-700 text-white rounded-xl hover:bg-green-800 disabled:opacity-50 font-bold flex items-center justify-center gap-2 shadow-lg shadow-green-700/20 transition-all"
+          >
+            {submitting ? 'Отправка...' : <><Send size={18} /> Сдать задание</>}
+          </button>
+        </div>
+      )}
+
+      {canReview && (
+        <div className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
+          <label className="block text-xs font-bold text-blue-600 uppercase mb-3 text-center">Проверка выполнения</label>
+          <textarea
+            value={reviewComment}
+            onChange={(e) => setReviewComment(e.target.value)}
+            placeholder="Ваш вердикт или замечания для доработки..."
+            className="w-full p-3 text-sm border border-blue-200 rounded-xl focus:ring-4 focus:ring-blue-700/10 focus:border-blue-700 outline-none transition-all h-24 mb-4"
+          />
+          <div className="flex gap-3">
+            <button
+              onClick={() => handleReviewAction(true)}
+              disabled={submitting}
+              className="flex-1 py-3 bg-green-700 text-white rounded-xl hover:bg-green-800 transition-all font-bold flex items-center justify-center gap-2"
+            >
+              <CheckCircle size={18} /> Принять
+            </button>
+            <button
+              onClick={() => handleReviewAction(false)}
+              disabled={submitting || !reviewComment.trim()}
+              className="flex-1 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-all font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+              title="Для возврата на доработку нужен комментарий"
+            >
+              <X size={18} /> Доработка
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1644,9 +1653,6 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
                   </option>
                 ))}
               </select>
-              {selectedUnitId && filteredUsers.length === 0 && (
-                <p className="text-xs text-amber-600 mt-1">В этом подразделении нет сотрудников</p>
-              )}
             </div>
 
             <div>

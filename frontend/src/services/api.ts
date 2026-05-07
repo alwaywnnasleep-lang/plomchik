@@ -189,7 +189,7 @@ class ApiService {
     });
   }
 
-  updateTask(id: number, task: any) {
+  updateTask(id: number | string, task: any) {
     return this.request(`/tasks/${id}/`, {
       method: 'PATCH',
       body: JSON.stringify(task),
@@ -278,10 +278,25 @@ class ApiService {
     return this.request(`/tasks/${taskId}/comments/`);
   }
 
-  addTaskComment(taskId: number, text: string, attachments?: File[]) {
+  addComment(taskId: number | string, text: string) {
     return this.request(`/tasks/${taskId}/comments/`, {
       method: 'POST',
       body: JSON.stringify({ text }),
+    });
+  }
+
+  uploadCommentFile(taskId: number | string, commentId: number | string, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return fetch(`${API_BASE_URL}/tasks/${taskId}/comments/${commentId}/attachments/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.getToken()}`
+      },
+      body: formData
+    }).then(res => {
+      if (!res.ok) throw new Error('Не удалось загрузить файл комментария');
+      return res.json();
     });
   }
 
@@ -450,7 +465,6 @@ class ApiService {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${this.getToken()}`,
-        // ВНИМАНИЕ: Content-Type не указываем, браузер сам подставит multipart/form-data и boundary
       },
       body: formData,
     }).then(async (res) => {
@@ -462,5 +476,5 @@ class ApiService {
     });
   }
 }
-  
+
 export default new ApiService();
