@@ -61,15 +61,23 @@ class CanAssignTo(BasePermission):
             return True
         if not request.user.is_authenticated:
             return False
+            
         assigned_to_id = request.data.get('assigned_to')
         if not assigned_to_id:
             return True
+            
+        # ФИКС: Разрешаем пользователю назначить задачу на самого себя (Взять в работу)
+        if str(assigned_to_id) == str(request.user.id):
+            return True
+            
         from django.contrib.auth import get_user_model
         User = get_user_model()
         try:
             target = User.objects.get(id=assigned_to_id)
         except User.DoesNotExist:
             return False
+            
+        from apps.structure.services import is_subordinate
         return is_subordinate(request.user, target)
 
 class CanCommentOnTask(BasePermission):

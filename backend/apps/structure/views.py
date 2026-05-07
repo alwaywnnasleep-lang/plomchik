@@ -1,8 +1,10 @@
 from rest_framework import generics, status, filters
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.decorators import action
 from django.contrib.auth import get_user_model
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db.models import Q
 
 from .models import OrgUnit, StructureChange
 from .serializers import (
@@ -38,6 +40,28 @@ class OrgUnitListCreateView(generics.ListCreateAPIView):
         if self.request.method == 'POST':
             return OrgUnitWriteSerializer
         return OrgUnitTreeSerializer
+
+    # НОВЫЙ МЕТОД: Фильтрация подразделений, доступных для постановки задач
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Если в запросе есть флаг ?available_for_tasks=true
+        if self.request.query_params.get('available_for_tasks') == 'true':
+            user = self.request.user
+            if user.is_superuser:
+                return queryset
+            
+            # Получаем ID подразделений, которыми пользователь может управлять (подчиненные)
+            subordinate_ids = get_units_under_authority(user)
+            
+            # Собираем фильтр: либо это подчиненное подразделение, либо его собственное
+            filter_q = Q(id__in=subordinate_ids)
+            if user.org_unit_id:
+                filter_q |= Q(id=user.org_unit_id)
+            
+            return queryset.filter(filter_q)
+            
+        return queryset
 
     def perform_create(self, serializer):
         unit = serializer.save()
@@ -124,65 +148,43 @@ class MovePersonnelView(APIView):
         target_unit_id = serializer.validated_data.get('target_unit_id')
 
         try:
-            user = User.objects.get(id=user_id)
+            target_user = User.objects.get(id=user_id)
         except User.DoesNotExist:
-            return Response({'error': 'Не найдено'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Пользователь не найден'}, status=status.HTTP_404_NOT_FOUND)
 
         old_unit_name = "—"
-        if hasattr(user, 'org_unit') and user.org_unit:
-            old_unit_name = user.org_unit.name
-        elif hasattr(user, 'unit') and user.unit:
-            old_unit_name = user.unit.name
+        if hasattr(target_user, 'org_unit') and target_user.org_unit:
+            old_unit_name = target_user.org_unit.name
 
         target_unit = None
         if target_unit_id:
             try:
                 target_unit = OrgUnit.objects.get(id=target_unit_id)
             except OrgUnit.DoesNotExist:
-                pass
+                return Response({'error': 'Целевое подразделение не найдено'}, status=status.HTTP_404_NOT_FOUND)
 
         if target_unit:
-            # ДОБАВЛЕНИЕ ИЛИ ПЕРЕМЕЩЕНИЕ В ПОДРАЗДЕЛЕНИЕ
-            if hasattr(target_unit, 'personnel'):
-                target_unit.personnel.add(user) 
-            elif hasattr(user, 'org_unit'):
-                user.org_unit = target_unit
-                user.save(update_fields=['org_unit'])
-            elif hasattr(user, 'unit'):
-                user.unit = target_unit
-                user.save(update_fields=['unit'])
-            else:
-                user.org_unit = target_unit
-                user.save()
+            target_user.org_unit = target_unit
+            target_user.save(update_fields=['org_unit'])
 
             StructureChange.objects.create(
                 org_unit=target_unit,
                 org_unit_name=target_unit.name,
                 change_type='personnel_moved',
-                description=f'{user.full_name} перемещен из «{old_unit_name}» в «{target_unit.name}»',
+                description=f'{target_user.full_name} перемещен из «{old_unit_name}» в «{target_unit.name}»',
                 changed_by=request.user,
             )
         else:
-            # УДАЛЕНИЕ ИЗ ПОДРАЗДЕЛЕНИЯ
-            old_unit_obj = None
-            if hasattr(user, 'org_unit'):
-                old_unit_obj = user.org_unit
-                user.org_unit = None
-                user.save(update_fields=['org_unit'])
-            elif hasattr(user, 'unit'):
-                old_unit_obj = user.unit
-                user.unit = None
-                user.save(update_fields=['unit'])
-            else:
-                user.org_unit = None
-                user.save()
+            old_unit_obj = getattr(target_user, 'org_unit', None)
+            target_user.org_unit = None
+            target_user.save(update_fields=['org_unit'])
 
             if old_unit_obj:
                 StructureChange.objects.create(
                     org_unit=old_unit_obj,
                     org_unit_name=old_unit_obj.name,
                     change_type='personnel_moved',
-                    description=f'{user.full_name} исключен из подразделения «{old_unit_name}»',
+                    description=f'{target_user.full_name} исключен из подразделения «{old_unit_name}»',
                     changed_by=request.user,
                 )
 

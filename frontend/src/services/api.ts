@@ -12,6 +12,11 @@ class ApiService {
     localStorage.setItem('access_token', token);
   }
 
+  // ФИКС: Используем встроенный метод this.request вместо несуществующего this.api
+  async getAvailableUnits() {
+    return this.request('/structure/units/?available_for_tasks=true');
+  }
+
   getToken() {
     return this.token || localStorage.getItem('access_token');
   }

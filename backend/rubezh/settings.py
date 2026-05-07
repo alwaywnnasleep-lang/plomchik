@@ -21,6 +21,7 @@ ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,web,fronten
 
 # Application definition
 INSTALLED_APPS = [
+    'daphne', # <--- ДОБАВИТЬ СЮДА
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -46,6 +47,7 @@ INSTALLED_APPS = [
     'apps.security',
     'apps.reports',
     'apps.knowledge',
+    'channels'
 ]
 
 MIDDLEWARE = [
@@ -80,7 +82,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'rubezh.wsgi.application'
+ASGI_APPLICATION = 'rubezh.asgi.application'
 
 # Database
 DATABASES = {
@@ -184,5 +186,15 @@ LOGGING = {
     'root': {
         'handlers': ['console'],
         'level': 'INFO',
+    },
+}
+
+# ========== CHANNELS (WebSockets) ==========
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [os.environ.get('REDIS_URL', 'redis://redis:6379/0')],
+        },
     },
 }

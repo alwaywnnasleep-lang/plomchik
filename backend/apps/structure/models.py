@@ -43,27 +43,38 @@ class OrgUnit(models.Model):
     
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        # Сохраняем само подразделение
+        super().save(*args, **kwargs)
+        
+        # ЛОГИКА: Если назначен командир, он должен автоматически состоять в этом подразделении
+        if self.commander:
+            # Проверяем, отличается ли его текущее подразделение от этого
+            # Используем ID, чтобы избежать лишних запросов к БД
+            if getattr(self.commander, 'org_unit_id', None) != self.id:
+                self.commander.org_unit = self
+                # Используем update_fields, чтобы обновить только одно поле и не триггерить лишние сигналы
+                self.commander.save(update_fields=['org_unit'])
     
     @property
     def personnel_list(self):
-        # Надежное чтение личного состава для любых вариантов полей
-        if hasattr(self, 'personnel'):
-            return self.personnel.filter(is_active=True)
-            
+        # Надежное чтение личного состава
         from django.contrib.auth import get_user_model
         User = get_user_model()
         
+        # Если в модели User связь называется org_unit
         if hasattr(User, 'org_unit'):
             return User.objects.filter(org_unit=self, is_active=True)
+        # Если связь называется unit
         if hasattr(User, 'unit'):
             return User.objects.filter(unit=self, is_active=True)
             
-        return []
+        return User.objects.none()
     
     @property
     def personnel_count(self):
-        personnel = self.personnel_list
-        return personnel.count() if personnel else 0
+        return self.personnel_list.count()
     
     def get_total_personnel_count(self):
         # Рекурсивный подсчёт всех пользователей в этом подразделении и всех дочерних

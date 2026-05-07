@@ -3,7 +3,7 @@ import {
   GripVertical, Calendar, Plus, X, AlertTriangle,
   Filter, Tag, MessageCircle, Send, Paperclip,
   Image, FileText, Download, Edit2, Trash2,
-  CheckCircle, Upload, Paperclip as PaperclipIcon, UserPlus, Users, RefreshCw
+  CheckCircle, Upload, Paperclip as PaperclipIcon, UserPlus, Users, RefreshCw, Save
 } from 'lucide-react';
 import type { Task, TaskStatus, Priority, Comment, User as UserType, TaskFile, TaskSubmission } from '@/types';
 import { cn } from '@/utils/cn';
@@ -31,6 +31,29 @@ const priorityConfig: Record<Priority, { label: string; color: string; bg: strin
   low: { label: 'Низкий', color: 'text-blue-700', bg: 'bg-blue-100' },
 };
 
+// ФИКС: Функция-переводчик. Превращает сырые данные Django (snake_case) в формат React (camelCase)
+const normalizeTask = (backendTask: any): Task => {
+  return {
+    ...backendTask,
+    id: backendTask.id?.toString(),
+    title: backendTask.title || '',
+    description: backendTask.description || '',
+    status: backendTask.status || 'todo',
+    priority: backendTask.priority || 'medium',
+    // Мапим ID из змеиного_регистра Django в camelCase фронтенда
+    assigneeId: backendTask.assigned_to?.toString() || backendTask.assigneeId || '',
+    creatorId: backendTask.created_by?.toString() || backendTask.creatorId || '',
+    unitId: backendTask.org_unit?.toString() || backendTask.unitId || '',
+    tags: backendTask.tags || [],
+    createdAt: backendTask.created_at || backendTask.createdAt,
+    deadline: backendTask.deadline || '',
+    subtasks: backendTask.subtasks || [],
+    comments: backendTask.comments || [],
+    attachments: backendTask.attachments || [],
+    submission: backendTask.submission || null
+  } as Task;
+};
+
 export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardProps) {
   const { user } = useAuth();
   const [draggedTask, setDraggedTask] = useState<string | null>(null);
@@ -42,9 +65,61 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
   const [users, setUsers] = useState<UserType[]>([]);
   const [units, setUnits] = useState<any[]>([]);
 
+  const onTasksChangeRef = useRef(onTasksChange);
+  useEffect(() => {
+    onTasksChangeRef.current = onTasksChange;
+  }, [onTasksChange]);
+
   useEffect(() => {
     loadUsers();
     loadUnits();
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//localhost:8000/ws/tasks/`;
+    let ws: WebSocket;
+    let reconnectTimeout: NodeJS.Timeout;
+
+    const connectWs = () => {
+      ws = new WebSocket(wsUrl);
+
+      ws.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'task_update') {
+            const response = await api.getTasks();
+            const rawTasks = Array.isArray(response) ? response : (response.results || []);
+            
+            // ФИКС: Прогоняем все пришедшие по вебсокету задачи через переводчик
+            const freshTasks = rawTasks.map(normalizeTask);
+            
+            onTasksChangeRef.current(freshTasks);
+            
+            setSelectedTask(prev => {
+              if (!prev) return null;
+              const updated = freshTasks.find((t: Task) => t.id === prev.id);
+              return updated || null;
+            });
+          }
+        } catch (e) {
+          console.error('WebSocket Error processing message:', e);
+        }
+      };
+
+      ws.onclose = () => {
+        reconnectTimeout = setTimeout(connectWs, 3000);
+      };
+      
+      ws.onerror = () => {
+        ws.close();
+      };
+    };
+
+    connectWs();
+
+    return () => {
+      clearTimeout(reconnectTimeout);
+      if (ws) ws.close();
+    };
   }, []);
 
   const loadUsers = async () => {
@@ -58,7 +133,8 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
 
   const loadUnits = async () => {
     try {
-      const unitsData = await api.getUnits();
+      // Используем новый типизированный метод
+      const unitsData = await api.getAvailableUnits(); 
       setUnits(Array.isArray(unitsData) ? unitsData : (unitsData.results || []));
     } catch (error) {
       console.error('Failed to load units:', error);
@@ -84,15 +160,29 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
       const task = tasks.find(t => t.id === draggedTask);
       if (!task) return;
 
+      const isLeader = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(user?.role || '');
+      const isCreator = task.creatorId === user?.id?.toString();
+
+      if (!isLeader && !isCreator && (status === 'review' || status === 'done')) {
+        alert('Вы не можете вручную перевести задачу на проверку или в "Выполнено". Откройте её и прикрепите отчет во вкладке "Выполнение".');
+        setDraggedTask(null);
+        return;
+      }
+
+      if (!task.assigneeId && (status === 'review' || status === 'done')) {
+        alert('Нельзя отправить на проверку или завершить задачу, у которой нет исполнителя.');
+        setDraggedTask(null);
+        return;
+      }
+
       const updatedTasks = tasks.map(t => t.id === draggedTask ? { ...t, status } : t);
       onTasksChange(updatedTasks);
 
       try {
         await api.moveTask(parseInt(draggedTask), status, 0);
       } catch (error) {
-        console.error('Failed to move task:', error);
         onTasksChange(tasks);
-        alert('Ошибка при перемещении задачи. Возможно, у вас нет прав на этот статус.');
+        alert('Ошибка при перемещении задачи.');
       }
       setDraggedTask(null);
     }
@@ -107,60 +197,27 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
         priority: task.priority,
       };
 
-      if (task.assigneeId) {
-        taskData.assigned_to = parseInt(task.assigneeId);
-      }
-      if (task.unitId) {
-        taskData.org_unit = parseInt(task.unitId);
-      } else {
-        throw new Error('Не выбрано подразделение');
-      }
-      if (task.deadline) {
-        taskData.deadline = task.deadline;
-      }
-      if (task.tags && task.tags.length > 0) {
-        taskData.tags = task.tags;
-      }
+      if (task.assigneeId) taskData.assigned_to = parseInt(task.assigneeId);
+      if (task.unitId) taskData.org_unit = parseInt(task.unitId);
+      else throw new Error('Не выбрано подразделение');
+      
+      if (task.deadline) taskData.deadline = task.deadline;
+      if (task.tags && task.tags.length > 0) taskData.tags = task.tags;
 
-      const createdTask = await api.createTask(taskData);
+      const createdTaskRaw = await api.createTask(taskData);
 
-      if (!createdTask || !createdTask.id) {
-        throw new Error('Сервер не вернул ID задачи');
-      }
-
-      const uploadedAttachments: TaskFile[] = [];
       if (files.length > 0) {
         for (const file of files) {
-          const uploaded = await api.uploadTaskFile(parseInt(createdTask.id), file, 'attachment');
-          uploadedAttachments.push({
-            id: uploaded.id.toString(),
-            fileName: uploaded.filename || uploaded.fileName || file.name,
-            fileUrl: uploaded.file,
-            uploadedBy: uploaded.uploaded_by,
-            uploadedByName: uploaded.uploaded_by_name,
-            createdAt: uploaded.created_at,
-          });
+          await api.uploadTaskFile(parseInt(createdTaskRaw.id), file, 'attachment');
         }
       }
 
-      const newTask: Task = {
-        id: createdTask.id.toString(),
-        title: createdTask.title,
-        description: createdTask.description || '',
-        status: createdTask.status,
-        priority: createdTask.priority,
-        assigneeId: createdTask.assigned_to?.toString() || '',
-        creatorId: createdTask.created_by?.toString() || '',
-        unitId: createdTask.org_unit?.toString() || '',
-        deadline: createdTask.deadline || '',
-        createdAt: createdTask.created_at,
-        tags: createdTask.tags || [],
-        subtasks: [],
-        comments: [],
-        attachments: uploadedAttachments,
-      };
-
-      onTasksChange([...tasks, newTask]);
+      // СРАЗУ запрашиваем свежий список и нормализуем его
+      const response = await api.getTasks();
+      const rawTasks = Array.isArray(response) ? response : (response.results || []);
+      const freshTasks = rawTasks.map(normalizeTask);
+      
+      onTasksChange(freshTasks);
       setShowAddModal(false);
     } catch (error: any) {
       console.error('Failed to create task:', error);
@@ -173,7 +230,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Канбан-доска</h1>
-          <p className="text-sm text-slate-500 mt-1">Управление задачами подразделений</p>
+          <p className="text-sm text-slate-500 mt-1">Управление задачами подразделений (Real-Time)</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -291,7 +348,6 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
               onTasksChange(tasks.filter(t => t.id !== id));
               setSelectedTask(null);
             } catch (error: any) {
-              console.error('Failed to delete task:', error);
               if (error.message?.includes('No Task matches')) {
                 onTasksChange(tasks.filter(t => t.id !== id));
                 setSelectedTask(null);
@@ -322,12 +378,14 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
   const subtasksTotal = task.subtasks?.length ?? 0;
   const commentsCount = task.comments?.length || 0;
   const attachmentsCount = task.attachments?.length || 0;
+  
+  // Благодаря normalizeTask это условие теперь работает идеально
   const isUnassigned = !task.assigneeId;
 
   const getAssigneeInitials = () => {
     if (!assignee) return '';
     const fullName = assignee.fullName || `${assignee.last_name || ''} ${assignee.first_name || ''}`;
-    return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase();
+    return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
   const getStatusIcon = () => {
@@ -477,8 +535,15 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 }) {
   const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'submission' | 'attachments'>('details');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
-  const [comments, setComments] = useState<Comment[]>(task.comments || []);
   const [isAssigning, setIsAssigning] = useState(false);
+  
+  const [isEditingTask, setIsEditingTask] = useState(false);
+  const [editData, setEditData] = useState({
+    title: task.title,
+    description: task.description,
+    priority: task.priority,
+    deadline: task.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''
+  });
 
   const assignee = users.find(u => u.id.toString() === task.assigneeId);
   const creator = users.find(u => u.id.toString() === task.creatorId);
@@ -486,40 +551,21 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
   const pConfig = priorityConfig[task.priority];
 
   const isLeader = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(currentUser?.role || '');
-  const isCreator = currentUser?.id.toString() === task.creatorId?.toString();
-  const isAssignee = currentUser?.id.toString() === task.assigneeId?.toString();
+  const isCreator = currentUser?.id?.toString() === task.creatorId?.toString();
+  const isAssignee = currentUser?.id?.toString() === task.assigneeId?.toString();
   const isMemberOfTaskUnit = currentUser?.org_unit?.toString() === task.unitId?.toString();
   const isUnassigned = !task.assigneeId;
   const canClaim = isUnassigned && isMemberOfTaskUnit;
   const unitUsers = users.filter(u => u.org_unit?.toString() === task.unitId?.toString());
 
   const allowedStatuses = columns.filter(col => {
+    if (!task.assigneeId && ['review', 'done'].includes(col.id)) return false;
     if (isLeader || isCreator) return true;
     if (isAssignee) {
       return ['todo', 'in_progress'].includes(col.id); 
     }
     return false;
   });
-
-  const handleAddComment = (newComment: Comment) => {
-    const updatedComments = [...comments, newComment];
-    setComments(updatedComments);
-    onUpdate({ ...task, comments: updatedComments });
-  };
-
-  const handleDeleteComment = (commentId: string) => {
-    const updatedComments = comments.filter(c => c.id !== commentId);
-    setComments(updatedComments);
-    onUpdate({ ...task, comments: updatedComments });
-  };
-
-  const handleEditComment = (commentId: string, newText: string) => {
-    const updatedComments = comments.map(c =>
-      c.id === commentId ? { ...c, text: newText } : c
-    );
-    setComments(updatedComments);
-    onUpdate({ ...task, comments: updatedComments });
-  };
 
   const handleClaimOrAssign = async (userId: string) => {
     setIsAssigning(true);
@@ -528,18 +574,25 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
         assigned_to: userId ? parseInt(userId) : null,
         status: 'in_progress' 
       });
-      
-      const updatedTask = {
-         ...task,
-         assigneeId: userId,
-         status: 'in_progress' as TaskStatus 
-      };
-      onUpdate(updatedTask);
     } catch (e) {
       console.error(e);
       alert('Ошибка при назначении задачи');
     } finally {
       setIsAssigning(false);
+    }
+  };
+
+  const handleSaveEditTask = async () => {
+    try {
+      await api.updateTask(parseInt(task.id), {
+        title: editData.title,
+        description: editData.description,
+        priority: editData.priority,
+        deadline: editData.deadline
+      });
+      setIsEditingTask(false);
+    } catch (error) {
+      alert('Ошибка при сохранении задачи');
     }
   };
 
@@ -549,7 +602,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
   const getAssigneeInitials = (user: any) => {
     const fullName = getAssigneeFullName(user);
-    return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase();
+    return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
   const renderFileList = (files: TaskFile[]) => {
@@ -584,14 +637,34 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
       <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="p-6 pb-2 border-b border-slate-200">
           <div className="flex items-start justify-between">
-            <div>
+            <div className="flex-1 pr-4">
               <div className="flex items-center gap-2 mb-2">
                 <span className={cn('text-xs font-medium px-2 py-0.5 rounded', pConfig.bg, pConfig.color)}>
                   {pConfig.label}
                 </span>
-                <span className="text-xs text-slate-400">#{task.id.slice(0, 6)}</span>
+                <span className="text-xs text-slate-400">#{String(task.id || '').slice(0, 6)}</span>
               </div>
-              <h2 className="text-lg font-bold text-slate-800">{task.title}</h2>
+              
+              {isEditingTask ? (
+                <input 
+                  value={editData.title}
+                  onChange={e => setEditData({...editData, title: e.target.value})}
+                  className="w-full text-lg font-bold border-b-2 border-green-700 bg-slate-50 px-2 py-1 outline-none mb-2"
+                />
+              ) : (
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  {task.title}
+                  {(isCreator || isLeader) && (
+                    <button 
+                      onClick={() => setIsEditingTask(true)} 
+                      className="text-slate-300 hover:text-green-700 transition-colors"
+                      title="Редактировать задачу"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                  )}
+                </h2>
+              )}
             </div>
             <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600">
               <X size={20} />
@@ -616,9 +689,9 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               )}
             >
               Обсуждение
-              {comments.length > 0 && (
+              {task.comments && task.comments.length > 0 && (
                 <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full ml-1">
-                  {comments.length}
+                  {task.comments.length}
                 </span>
               )}
             </button>
@@ -664,7 +737,54 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'details' && (
             <div className="space-y-4">
-              <p className="text-sm text-slate-600">{task.description}</p>
+              
+              {isEditingTask ? (
+                <div className="space-y-4 mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-inner">
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Описание</label>
+                    <textarea 
+                      value={editData.description}
+                      onChange={e => setEditData({...editData, description: e.target.value})}
+                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-green-700/30"
+                      rows={4}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Приоритет</label>
+                      <select 
+                        value={editData.priority}
+                        onChange={e => setEditData({...editData, priority: e.target.value as Priority})}
+                        className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-green-700/30"
+                      >
+                        <option value="critical">Критический</option>
+                        <option value="high">Высокий</option>
+                        <option value="medium">Средний</option>
+                        <option value="low">Низкий</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Дедлайн</label>
+                      <input 
+                        type="datetime-local"
+                        value={editData.deadline}
+                        onChange={e => setEditData({...editData, deadline: e.target.value})}
+                        className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-green-700/30"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button onClick={handleSaveEditTask} className="flex items-center gap-1.5 px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 transition-colors">
+                      <Save size={16} /> Сохранить изменения
+                    </button>
+                    <button onClick={() => setIsEditingTask(false)} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">
+                      Отмена
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600 mb-6">{task.description}</p>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -760,7 +880,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               </div>
 
               {task.tags.length > 0 && (
-                <div>
+                <div className="mt-4">
                   <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Метки</div>
                   <div className="flex flex-wrap gap-1">
                     {task.tags.map(tag => (
@@ -771,7 +891,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               )}
 
               {task.subtasks && task.subtasks.length > 0 && (
-                <div>
+                <div className="mt-4">
                   <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Подзадачи</div>
                   <div className="space-y-1.5">
                     {task.subtasks.map(st => (
@@ -779,12 +899,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                         <input
                           type="checkbox"
                           checked={st.done}
-                          onChange={() => {
-                            const updated = {
-                              ...task,
-                              subtasks: task.subtasks!.map(s => s.id === st.id ? { ...s, done: !s.done } : s),
-                            };
-                            onUpdate(updated);
+                          onChange={async () => {
+                            // Логика подзадач
                           }}
                           className="rounded border-slate-300 text-green-700 focus:ring-green-700"
                         />
@@ -802,7 +918,9 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                     {allowedStatuses.map(col => (
                       <button
                         key={col.id}
-                        onClick={() => onUpdate({ ...task, status: col.id })}
+                        onClick={async () => {
+                          await api.moveTask(parseInt(task.id), col.id, 0);
+                        }}
                         className={cn(
                           'text-xs px-2.5 py-1 rounded-lg border transition-colors',
                           task.status === col.id
@@ -822,11 +940,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
           {activeTab === 'comments' && (
             <TaskComments
               taskId={task.id}
-              comments={comments}
+              comments={task.comments || []}
               currentUser={currentUser}
-              onAddComment={handleAddComment}
-              onDeleteComment={handleDeleteComment}
-              onEditComment={handleEditComment}
             />
           )}
 
@@ -840,7 +955,6 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
           {activeTab === 'submission' && (
             <TaskSubmission
               task={task}
-              onTaskUpdate={onUpdate}
             />
           )}
         </div>
@@ -884,13 +998,10 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 }
 
 // ========== TaskComments Component ==========
-function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteComment, onEditComment }: {
+function TaskComments({ taskId, comments, currentUser }: {
   taskId: string;
-  comments: Comment[];
+  comments: any[];
   currentUser: any;
-  onAddComment: (comment: Comment) => void;
-  onDeleteComment: (id: string) => void;
-  onEditComment: (id: string, newText: string) => void;
 }) {
   const [newComment, setNewComment] = useState('');
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
@@ -912,29 +1023,10 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
     try {
       const createdComment = await api.addComment(taskId, newComment);
 
-      const uploadedAttachments = [];
       for (const file of attachments) {
-        const uploaded = await api.uploadCommentFile(taskId, createdComment.id, file);
-        uploadedAttachments.push(uploaded);
+        await api.uploadCommentFile(taskId, createdComment.id, file);
       }
 
-      const newCommentObj: Comment = {
-        id: createdComment.id.toString(),
-        taskId,
-        userId: currentUser?.id.toString() || '',
-        userFullName: currentUser?.fullName || currentUser?.full_name || '',
-        userRank: currentUser?.rank || '',
-        text: createdComment.text,
-        createdAt: createdComment.created_at || new Date().toISOString(),
-        attachments: uploadedAttachments.map((att: any) => ({
-          id: att.id.toString(),
-          url: att.file || att.fileUrl,
-          name: att.filename || att.fileName,
-          type: (att.filename || '').endsWith('jpg') ? 'image/jpeg' : 'application/pdf',
-        })),
-      };
-
-      onAddComment(newCommentObj);
       setNewComment('');
       setAttachments([]);
       setShowAttachmentMenu(false);
@@ -943,6 +1035,14 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
       alert('Не удалось отправить комментарий');
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleDelete = async (commentId: string) => {
+    try {
+      await api.deleteTaskComment(parseInt(commentId));
+    } catch (error) {
+      alert('Ошибка при удалении комментария');
     }
   };
 
@@ -963,16 +1063,20 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
     }
   };
 
-  const startEditing = (comment: Comment) => {
+  const startEditing = (comment: any) => {
     setEditingCommentId(comment.id);
     setEditText(comment.text);
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (editingCommentId && editText.trim()) {
-      onEditComment(editingCommentId, editText);
-      setEditingCommentId(null);
-      setEditText('');
+      try {
+        await api.updateTaskComment(parseInt(editingCommentId), editText);
+        setEditingCommentId(null);
+        setEditText('');
+      } catch (error) {
+        alert('Ошибка сохранения');
+      }
     }
   };
 
@@ -982,34 +1086,39 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
   };
 
   const formatDate = (dateString: string) => {
+    if (!dateString) return '';
     const date = new Date(dateString);
     return date.toLocaleDateString('ru-RU', {
       day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
     });
   };
 
-  const renderFileList = (files: { id: string; url: string; name: string; type?: string }[]) => {
+  const renderFileList = (files: { id: string; url: string; fileUrl?: string; file?: string; name?: string; filename?: string; type?: string }[]) => {
     return (
       <div className="mt-2 flex flex-wrap gap-2">
-        {files.map((att) => (
-          <div key={att.id} className="flex items-center gap-1 bg-slate-50 rounded-lg px-2 py-1 border border-slate-200">
-            {att.type?.startsWith('image/') ? (
-              <Image size={12} className="text-slate-400" />
-            ) : (
-              <FileText size={12} className="text-slate-400" />
-            )}
-            <span className="text-xs text-slate-600 max-w-[100px] truncate">{att.name}</span>
-            <a
-              href={att.url}
-              download={att.name}
-              className="ml-1 p-0.5 hover:bg-slate-200 rounded"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Download size={10} className="text-slate-500" />
-            </a>
-          </div>
-        ))}
+        {files.map((att) => {
+          const fileUrl = att.url || att.fileUrl || att.file || '';
+          const fileName = att.name || att.filename || 'Файл';
+          return (
+            <div key={att.id} className="flex items-center gap-1 bg-slate-50 rounded-lg px-2 py-1 border border-slate-200">
+              {fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                <Image size={12} className="text-slate-400" />
+              ) : (
+                <FileText size={12} className="text-slate-400" />
+              )}
+              <span className="text-xs text-slate-600 max-w-[100px] truncate">{fileName}</span>
+              <a
+                href={fileUrl}
+                download={fileName}
+                className="ml-1 p-0.5 hover:bg-slate-200 rounded"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Download size={10} className="text-slate-500" />
+              </a>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -1017,78 +1126,86 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
   return (
     <div className="space-y-4">
       <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-        {comments.map((comment) => (
-          <div key={comment.id} className="group relative">
-            <div className="flex gap-3">
-              <div className="flex-shrink-0">
-                <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
-                  {comment.userFullName.split(' ').map((n: string) => n[0]).join('')}
-                </div>
-              </div>
+        {comments.map((comment: any) => {
+          const fullName = comment.userFullName || comment.user_full_name || 'Неизвестно';
+          const rank = comment.userRank || comment.user_rank || '';
+          const date = comment.createdAt || comment.created_at;
+          const authorId = comment.userId?.toString() || comment.user?.toString();
+          const initials = fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
 
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-sm font-medium text-slate-800">
-                    {comment.userRank} {comment.userFullName}
-                  </span>
-                  <span className="text-[10px] text-slate-400">
-                    {formatDate(comment.createdAt)}
-                  </span>
-                </div>
-
-                {editingCommentId === comment.id ? (
-                  <div className="space-y-2">
-                    <textarea
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
-                      rows={2}
-                      autoFocus
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        onClick={saveEdit}
-                        className="text-xs px-2 py-1 bg-green-700 text-white rounded hover:bg-green-800"
-                      >
-                        Сохранить
-                      </button>
-                      <button
-                        onClick={cancelEdit}
-                        className="text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"
-                      >
-                        Отмена
-                      </button>
-                    </div>
+          return (
+            <div key={comment.id} className="group relative">
+              <div className="flex gap-3">
+                <div className="flex-shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
+                    {initials}
                   </div>
-                ) : (
-                  <>
-                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{comment.text}</p>
-                    {comment.attachments && comment.attachments.length > 0 && renderFileList(comment.attachments)}
-                  </>
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-medium text-slate-800">
+                      {rank} {fullName}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {formatDate(date)}
+                    </span>
+                  </div>
+
+                  {editingCommentId === comment.id ? (
+                    <div className="space-y-2">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                        rows={2}
+                        autoFocus
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={saveEdit}
+                          className="text-xs px-2 py-1 bg-green-700 text-white rounded hover:bg-green-800"
+                        >
+                          Сохранить
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          className="text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"
+                        >
+                          Отмена
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-sm text-slate-700 whitespace-pre-wrap">{comment.text}</p>
+                      {comment.attachments && comment.attachments.length > 0 && renderFileList(comment.attachments)}
+                    </>
+                  )}
+                </div>
+
+                {authorId === currentUser?.id?.toString() && !editingCommentId && (
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                    <button
+                      onClick={() => startEditing(comment)}
+                      className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                      title="Редактировать"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(comment.id)}
+                      className="p-1 text-slate-400 hover:text-red-600 rounded"
+                      title="Удалить"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 )}
               </div>
-
-              {comment.userId === currentUser?.id.toString() && !editingCommentId && (
-                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                  <button
-                    onClick={() => startEditing(comment)}
-                    className="p-1 text-slate-400 hover:text-blue-600 rounded"
-                    title="Редактировать"
-                  >
-                    <Edit2 size={12} />
-                  </button>
-                  <button
-                    onClick={() => onDeleteComment(comment.id)}
-                    className="p-1 text-slate-400 hover:text-red-600 rounded"
-                    title="Удалить"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div ref={commentsEndRef} />
       </div>
 
@@ -1097,7 +1214,7 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
           <div className="mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
             <div className="text-xs font-medium text-slate-600 mb-2 flex items-center gap-2">
               <Paperclip size={12} />
-              Прикреплённые файлы к комментарию:
+              Прикреплённые файлы:
             </div>
             <div className="flex flex-wrap gap-2">
               {attachments.map((file, index) => (
@@ -1192,9 +1309,8 @@ function TaskComments({ taskId, comments, currentUser, onAddComment, onDeleteCom
 }
 
 // ========== TaskSubmission Component ==========
-function TaskSubmission({ task, onTaskUpdate }: {
+function TaskSubmission({ task }: {
   task: Task;
-  onTaskUpdate: (updatedTask: Task) => void;
 }) {
   const { user } = useAuth();
   const [files, setFiles] = useState<File[]>([]);
@@ -1203,10 +1319,9 @@ function TaskSubmission({ task, onTaskUpdate }: {
   const [reviewComment, setReviewComment] = useState('');
   const [reviewFiles, setReviewFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const reviewFileInputRef = useRef<HTMLInputElement>(null);
 
-  const isAssignee = user?.id.toString() === task.assigneeId?.toString();
-  const isCreator = user?.id.toString() === task.creatorId?.toString();
+  const isAssignee = user?.id?.toString() === task.assigneeId?.toString();
+  const isCreator = user?.id?.toString() === task.creatorId?.toString();
   const isCommander = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(user?.role || '');
   
   const canSubmit = isAssignee && (task.status === 'in_progress' || task.status === 'todo');
@@ -1221,39 +1336,14 @@ function TaskSubmission({ task, onTaskUpdate }: {
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleReviewFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || []);
-    setReviewFiles(prev => [...prev, ...selectedFiles]);
-  };
-
-  const removeReviewFile = (index: number) => {
-    setReviewFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
       await api.submitTask(parseInt(task.id), comment);
-
-      const uploadedFiles: TaskFile[] = [];
       for (const file of files) {
-        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
-        uploadedFiles.push(uploaded);
+        await api.uploadTaskFile(parseInt(task.id), file, 'submission');
       }
-
-      const updatedTask = {
-        ...task,
-        status: 'review' as TaskStatus,
-        submission: {
-          status: 'pending' as const,
-          comment,
-          files: uploadedFiles,
-          submitted_at: new Date().toISOString()
-        } as any
-      };
-
-      onTaskUpdate(updatedTask);
       setFiles([]);
       setComment('');
     } catch (error) {
@@ -1268,13 +1358,6 @@ function TaskSubmission({ task, onTaskUpdate }: {
     setSubmitting(true);
     try {
       await api.updateTask(parseInt(task.id), { status: 'in_progress' });
-      
-      const updatedTask = {
-        ...task,
-        status: 'in_progress' as TaskStatus
-      };
-      
-      onTaskUpdate(updatedTask);
     } catch (error) {
       console.error(error);
       alert('Не удалось отозвать задание.');
@@ -1293,24 +1376,10 @@ function TaskSubmission({ task, onTaskUpdate }: {
         await api.rejectTask(parseInt(task.id), reviewComment);
       }
 
-      const uploadedFiles: TaskFile[] = [];
       for (const file of reviewFiles) {
-        const uploaded = await api.uploadTaskFile(parseInt(task.id), file, 'submission');
-        uploadedFiles.push(uploaded);
+        await api.uploadTaskFile(parseInt(task.id), file, 'submission');
       }
 
-      const updatedTask = {
-        ...task,
-        status: (approve ? 'done' : 'in_progress') as TaskStatus,
-        submission: task.submission ? {
-          ...task.submission,
-          status: approve ? 'approved' : 'rejected',
-          reviewComment,
-          reviewedAt: new Date().toISOString()
-        } : undefined as any
-      };
-
-      onTaskUpdate(updatedTask);
       setReviewComment('');
       setReviewFiles([]);
     } catch (error) {
@@ -1318,49 +1387,6 @@ function TaskSubmission({ task, onTaskUpdate }: {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  };
-
-  const renderFileList = (files: TaskFile[] | File[], onRemove?: (index: number) => void, isEditable = false) => {
-    return (
-      <div className="space-y-2">
-        {files.map((file, index) => {
-          const isTaskFile = 'fileName' in file;
-          const fileName = isTaskFile ? (file.fileName || file.filename || 'Файл') : (file.name || 'Файл');
-          const fileSize = isTaskFile ? undefined : file.size;
-          const fileUrl = isTaskFile ? (file.fileUrl || file.file) : URL.createObjectURL(file);
-          return (
-            <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
-              {fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i) ? (
-                <Image size={16} className="text-slate-400" />
-              ) : (
-                <FileText size={16} className="text-slate-400" />
-              )}
-              <span className="text-sm text-slate-600 flex-1 truncate">{fileName}</span>
-              {fileSize && <span className="text-xs text-slate-400">{formatFileSize(fileSize)}</span>}
-              {fileUrl && (
-                <a href={fileUrl} download={fileName} className="p-1 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
-                  <Download size={14} className="text-slate-500" />
-                </a>
-              )}
-              {onRemove && isEditable && (
-                <button
-                  onClick={() => onRemove(index)}
-                  className="p-1 hover:bg-slate-200 rounded"
-                >
-                  <X size={14} className="text-slate-500" />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
   };
 
   return (
@@ -1568,10 +1594,6 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
     }
   };
 
-  const getAssigneeFullName = (user: any) => {
-    return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim();
-  };
-
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -1649,7 +1671,7 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
                 <option value="">Не назначен (задача на подразделение)</option>
                 {filteredUsers.map(u => (
                   <option key={u.id} value={u.id.toString()}>
-                    {u.rank} {getAssigneeFullName(u)}
+                    {u.rank} {u.fullName || `${(u as any).last_name || ''} ${(u as any).first_name || ''}`.trim()}
                   </option>
                 ))}
               </select>

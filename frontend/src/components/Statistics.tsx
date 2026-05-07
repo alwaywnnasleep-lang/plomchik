@@ -1,309 +1,241 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
-  PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer 
+  PieChart, Pie, Cell, ResponsiveContainer, Legend
 } from 'recharts';
-import { Calendar, Filter, Download, TrendingUp, Users, CheckCircle, Clock } from 'lucide-react';
-import type { Task, OrgUnit } from '@/types';
+import { 
+  TrendingUp, CheckCircle, Clock, AlertTriangle, 
+  Target, Medal, Award, Briefcase, ChevronRight 
+} from 'lucide-react';
+import type { Task, OrgUnit, User } from '@/types';
+import api from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { cn } from '@/utils/cn';
 
 interface StatisticsProps {
   tasks: Task[];
-  units?: OrgUnit[]; // список подразделений для отображения названий
+  units: OrgUnit[];
+  users: User[];
+  onTasksChange: (tasks: Task[]) => void;
 }
 
-const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
+const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
 
-export function Statistics({ tasks, units = [] }: StatisticsProps) {
-  const [dateRange, setDateRange] = useState<'week' | 'month' | 'quarter' | 'year'>('month');
+export function Statistics({ tasks, units, users, onTasksChange }: StatisticsProps) {
+  const { user } = useAuth();
   const [selectedUnit, setSelectedUnit] = useState<string>('all');
-  const [selectedPriority, setSelectedPriority] = useState<string>('all');
 
-  // Фильтрация задач
+  // WebSocket для обновлений
+  const onTasksChangeRef = useRef(onTasksChange);
+  useEffect(() => { onTasksChangeRef.current = onTasksChange; }, [onTasksChange]);
+
+  useEffect(() => {
+    const wsUrl = `ws://${window.location.hostname}:8000/ws/tasks/`;
+    let ws: WebSocket;
+    const connect = () => {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = async () => {
+        const res = await api.getTasks();
+        onTasksChangeRef.current(Array.isArray(res) ? res : (res.results || []));
+      };
+      ws.onclose = () => setTimeout(connect, 3000);
+    };
+    connect();
+    return () => ws?.close();
+  }, []);
+
+  // --- ЛОГИКА ДОСТУПА (ИЕРАРХИЯ) ---
+  const myAvailableUnits = useMemo(() => {
+    // Если админ — видит всё
+    if (user?.role === 'admin') return units;
+
+    // Ищем подразделения, где текущий пользователь — командир (commanderId), 
+    // ИЛИ это его основное подразделение (org_unit)
+    return units.filter(u => 
+      String(u.commanderId) === String(user?.id) || 
+      String(u.id) === String(user?.org_unit)
+    );
+  }, [units, user]);
+
   const filteredTasks = useMemo(() => {
-    return (tasks || []).filter(task => {
-      // Приводим оба значения к строке для безопасного сравнения
-      if (selectedUnit !== 'all' && String(task.unitId) !== String(selectedUnit)) return false;
-      if (selectedPriority !== 'all' && String(task.priority) !== String(selectedPriority)) return false;
-      return true;
-    });
-  }, [tasks, selectedUnit, selectedPriority]);
+    const allowedIds = myAvailableUnits.map(u => String(u.id));
+    let result = (tasks || []).filter(t => allowedIds.includes(String(t.unitId)));
 
-  // Статистика по статусам
-  const statusStats = useMemo(() => {
-    const stats: Record<string, number> = {
-      planned: 0,
-      todo: 0,
-      in_progress: 0,
-      review: 0,
-      done: 0,
-    };
-    filteredTasks.forEach(task => {
-      const status = task.status;
-      if (status in stats) {
-        stats[status] += 1;
-      } else {
-        // если неизвестный статус, добавляем в planned для простоты
-        stats.planned += 1;
-      }
-    });
-    return Object.entries(stats).map(([status, value]) => ({
-      name: status === 'planned' ? 'Запланировано' :
-            status === 'todo' ? 'К выполнению' :
-            status === 'in_progress' ? 'В работе' :
-            status === 'review' ? 'На проверке' : 'Выполнено',
-      value
-    }));
-  }, [filteredTasks]);
-
-  // Статистика по приоритетам
-  const priorityStats = useMemo(() => {
-    const stats = {
-      critical: 0,
-      high: 0,
-      medium: 0,
-      low: 0,
-    };
-    filteredTasks.forEach(task => {
-      if (task.priority in stats) {
-        stats[task.priority as keyof typeof stats] += 1;
-      }
-    });
-    return Object.entries(stats).map(([priority, value]) => ({
-      name: priority === 'critical' ? 'Критический' :
-            priority === 'high' ? 'Высокий' :
-            priority === 'medium' ? 'Средний' : 'Низкий',
-      value
-    }));
-  }, [filteredTasks]);
-
-  // Статистика по подразделениям (используем переданные units для названий)
-  const unitStats = useMemo(() => {
-    const stats: Record<string, number> = {};
-    filteredTasks.forEach(task => {
-      const unitId = task.unitId;
-      if (unitId) {
-        stats[unitId] = (stats[unitId] || 0) + 1;
-      }
-    });
-    return Object.entries(stats)
-      .map(([unitId, count]) => ({
-        name: units.find(u => u.id === unitId)?.name || unitId,
-        value: count
-      }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 10);
-  }, [filteredTasks, units]);
-
-  // Прогресс по дням (за последние 30 дней)
-  const dailyProgress = useMemo(() => {
-    const today = new Date();
-    const days = [];
-    for (let i = 29; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      
-      // Формируем YYYY-MM-DD в локальном часовом поясе, а не в UTC
-      const yyyy = date.getFullYear();
-      const mm = String(date.getMonth() + 1).padStart(2, '0');
-      const dd = String(date.getDate()).padStart(2, '0');
-      const dateStr = `${yyyy}-${mm}-${dd}`;
-      
-      const completed = filteredTasks.filter(t => 
-        t.status === 'done' && t.createdAt?.startsWith(dateStr)
-      ).length;
-      
-      days.push({
-        date: `${dd}.${mm}`, // Более привычный формат ДД.ММ для графика
-        completed
-      });
+    if (selectedUnit !== 'all') {
+      result = result.filter(t => String(t.unitId) === String(selectedUnit));
     }
-    return days;
-  }, [filteredTasks]);
+    return result;
+  }, [tasks, myAvailableUnits, selectedUnit]);
 
-  // Общие метрики
-  const metrics = useMemo(() => {
-    const total = filteredTasks.length;
-    const completed = filteredTasks.filter(t => t.status === 'done').length;
-    const inProgress = filteredTasks.filter(t => t.status === 'in_progress').length;
-    const overdue = filteredTasks.filter(t => 
-      new Date(t.deadline) < new Date() && t.status !== 'done'
-    ).length;
+  // --- ЛУЧШИЙ СОТРУДНИК ---
+  const topPerformer = useMemo(() => {
+    if (!users || !Array.isArray(users)) return null;
+
+    const userTaskCounts: Record<string, number> = {};
+    filteredTasks.forEach(t => {
+      if (t.status === 'done' && t.assigneeId) {
+        userTaskCounts[t.assigneeId] = (userTaskCounts[t.assigneeId] || 0) + 1;
+      }
+    });
+
+    const bestUserId = Object.entries(userTaskCounts)
+      .sort(([, a], [, b]) => b - a)[0]?.[0];
+
+    if (!bestUserId) return null;
+    const foundUser = users.find(u => String(u.id) === String(bestUserId));
     
     return {
-      total,
-      completed,
-      inProgress,
-      overdue,
-      completionRate: total ? Math.round((completed / total) * 100) : 0
+      name: foundUser?.fullName || 'Сотрудник',
+      rank: foundUser?.rank || '—',
+      count: userTaskCounts[bestUserId]
     };
+  }, [filteredTasks, users]);
+
+  // --- ДАННЫЕ ДЛЯ ДИАГРАММ ---
+  const statusData = useMemo(() => {
+    const counts = { todo: 0, in_progress: 0, review: 0, done: 0 };
+    filteredTasks.forEach(t => { if (t.status in counts) counts[t.status as keyof typeof counts]++; });
+    return [
+      { name: 'Ожидают', value: counts.todo, color: '#94a3b8' },
+      { name: 'В работе', value: counts.in_progress, color: '#f59e0b' },
+      { name: 'Проверка', value: counts.review, color: '#8b5cf6' },
+      { name: 'Готово', value: counts.done, color: '#10b981' },
+    ].filter(d => d.value > 0);
   }, [filteredTasks]);
 
-  // Вспомогательная функция для форматирования даты
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  const metrics = {
+    total: filteredTasks.length,
+    done: filteredTasks.filter(t => t.status === 'done').length,
+    overdue: filteredTasks.filter(t => t.status !== 'done' && t.deadline && new Date(t.deadline) < new Date()).length,
+    rate: filteredTasks.length ? Math.round((filteredTasks.filter(t => t.status === 'done').length / filteredTasks.length) * 100) : 0
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="p-1 space-y-6 pb-10">
+      {/* Заголовок и Фильтр */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Статистика выполнения задач</h1>
-          <p className="text-sm text-slate-500 mt-1">Аналитика и метрики по задачам</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
-            <Download size={14} />
-            Экспорт
-          </button>
-        </div>
-      </div>
-
-      {/* Фильтры */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-4">
-        <div className="flex items-center gap-2">
-          <Calendar size={16} className="text-slate-400" />
-          <select
-            value={dateRange}
-            onChange={(e) => setDateRange(e.target.value as any)}
-            className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-          >
-            <option value="week">Последняя неделя</option>
-            <option value="month">Последний месяц</option>
-            <option value="quarter">Последний квартал</option>
-            <option value="year">Последний год</option>
-          </select>
+          <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            <div className="p-2 bg-emerald-600 rounded-lg text-white shadow-lg shadow-emerald-200">
+              <TrendingUp size={24} />
+            </div>
+            АНАЛИТИКА ШТАТА
+          </h1>
+          <p className="text-slate-500 font-medium mt-1">Мониторинг ресурсов и результативности подразделений</p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Filter size={16} className="text-slate-400" />
-          <select
+        <div className="flex items-center gap-2 bg-white border border-slate-200 p-2 rounded-2xl shadow-sm">
+          <Briefcase size={18} className="text-slate-400 ml-2" />
+          <select 
+            className="border-none bg-transparent font-bold text-slate-700 focus:ring-0 text-sm min-w-[220px]"
             value={selectedUnit}
             onChange={(e) => setSelectedUnit(e.target.value)}
-            className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
           >
-            <option value="all">Все подразделения</option>
-            {units.map(unit => (
-              <option key={unit.id} value={unit.id}>{unit.name}</option>
+            <option value="all">Все мои подразделения</option>
+            {myAvailableUnits.map(u => (
+              <option key={u.id} value={u.id}>{u.name}</option>
             ))}
           </select>
         </div>
-
-        <select
-          value={selectedPriority}
-          onChange={(e) => setSelectedPriority(e.target.value)}
-          className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-        >
-          <option value="all">Все приоритеты</option>
-          <option value="critical">Критический</option>
-          <option value="high">Высокий</option>
-          <option value="medium">Средний</option>
-          <option value="low">Низкий</option>
-        </select>
       </div>
 
-      {/* Ключевые метрики */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="flex items-center gap-2 text-emerald-600 mb-2">
-            <TrendingUp size={20} />
-            <span className="text-sm font-medium">Всего задач</span>
-          </div>
-          <div className="text-3xl font-bold text-slate-800">{metrics.total}</div>
+      {/* Верхний ряд: Метрики и Лучший человек */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        <div className="lg:col-span-3 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <MetricBox title="Задач в базе" value={metrics.total} sub="Общий объем" icon={<Target className="text-blue-600"/>} />
+          <MetricBox title="Завершено" value={metrics.done} sub={`${metrics.rate}% успех`} icon={<CheckCircle className="text-emerald-600"/>} />
+          <MetricBox title="Эффективность" value={`${metrics.rate}%`} sub="KPI подразделения" icon={<Medal className="text-amber-600"/>} />
+          <MetricBox title="Просрочено" value={metrics.overdue} sub="Требует внимания" icon={<AlertTriangle className="text-red-600"/>} danger={metrics.overdue > 0} />
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="flex items-center gap-2 text-blue-600 mb-2">
-            <Clock size={20} />
-            <span className="text-sm font-medium">В работе</span>
+        {/* Карточка лучшего сотрудника */}
+        <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden group">
+          <Award className="absolute -right-4 -top-4 w-24 h-24 text-white/5 group-hover:rotate-12 transition-transform duration-500" />
+          <div className="relative z-10">
+            <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-4">Лучший в отделе</h3>
+            {topPerformer ? (
+              <>
+                <div className="text-xl font-black leading-tight mb-1">{topPerformer.name}</div>
+                <div className="text-xs text-slate-400 mb-4">{topPerformer.rank}</div>
+                <div className="flex items-center gap-2">
+                  <div className="px-3 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-full text-emerald-400 text-xs font-bold">
+                    {topPerformer.count} задач выполнено
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-slate-400 italic">Данные собираются...</div>
+            )}
           </div>
-          <div className="text-3xl font-bold text-slate-800">{metrics.inProgress}</div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="flex items-center gap-2 text-green-600 mb-2">
-            <CheckCircle size={20} />
-            <span className="text-sm font-medium">Выполнено</span>
-          </div>
-          <div className="text-3xl font-bold text-slate-800">{metrics.completed}</div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="flex items-center gap-2 text-red-600 mb-2">
-            <Users size={20} />
-            <span className="text-sm font-medium">Просрочено</span>
-          </div>
-          <div className="text-3xl font-bold text-slate-800">{metrics.overdue}</div>
         </div>
       </div>
 
-      {/* Графики */}
+      {/* Диаграммы */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Статусы */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Распределение по статусам</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={statusStats.filter(s => s.value > 0)}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
-                outerRadius={80}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {statusStats.filter(s => s.value > 0).map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} name={entry.name} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-8">
+            <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Структура выполнения</h3>
+            <div className="text-[10px] bg-slate-100 px-2 py-1 rounded-md text-slate-500">REAL-TIME</div>
+          </div>
+          <div className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={statusData}
+                  innerRadius={80}
+                  outerRadius={105}
+                  paddingAngle={5}
+                  dataKey="value"
+                  stroke="none"
+                >
+                  {statusData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 20px rgba(0,0,0,0.1)'}} />
+                <Legend iconType="circle" />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
-        {/* Приоритеты */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Распределение по приоритетам</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={priorityStats}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="value" fill="#10b981" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Динамика выполнения */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 lg:col-span-2">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Динамика выполнения задач</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={dailyProgress}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="completed" stroke="#10b981" strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Топ подразделений */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 lg:col-span-2">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Топ-10 подразделений по задачам</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={unitStats} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" />
-              <YAxis dataKey="name" type="category" width={150} />
-              <Tooltip />
-              <Bar dataKey="value" fill="#10b981" />
-            </BarChart>
-          </ResponsiveContainer>
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-8">
+            <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Нагрузка по группам</h3>
+          </div>
+          <div className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={myAvailableUnits.map(u => ({
+                name: u.name,
+                count: tasks.filter(t => String(t.unitId) === String(u.id)).length
+              }))}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#64748b'}} />
+                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#64748b'}} />
+                <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '16px', border: 'none'}} />
+                <Bar dataKey="count" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={35} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MetricBox({ title, value, sub, icon, danger }: any) {
+  return (
+    <div className={cn(
+      "bg-white p-5 rounded-3xl border border-slate-200 shadow-sm transition-all hover:border-emerald-200",
+      danger && "border-red-100 bg-red-50/30"
+    )}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="p-2 bg-slate-50 rounded-xl">{icon}</div>
+        <ChevronRight size={14} className="text-slate-300" />
+      </div>
+      <div className={cn("text-2xl font-black text-slate-800", danger && "text-red-600")}>{value}</div>
+      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">{title}</div>
+      <div className="text-[9px] text-slate-400 mt-1">{sub}</div>
     </div>
   );
 }
