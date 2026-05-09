@@ -12,8 +12,7 @@ class ApiService {
     localStorage.setItem('access_token', token);
   }
 
-  // ФИКС: Используем встроенный метод this.request вместо несуществующего this.api
-  async getAvailableUnits() {
+  getAvailableUnits() {
     return this.request('/structure/units/?available_for_tasks=true');
   }
 
@@ -50,19 +49,19 @@ class ApiService {
     const token = this.getToken();
 
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
       ...(options.headers as Record<string, string> || {}),
     };
+
+    if (!(options.body instanceof FormData) && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
 
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
     try {
-      let response = await fetch(url, { 
-        ...options, 
-        headers 
-      });
+      let response = await fetch(url, { ...options, headers });
 
       if (response.status === 401 && token) {
         try {
@@ -78,11 +77,6 @@ class ApiService {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        console.error('Server error response:', {
-          status: response.status,
-          statusText: response.statusText,
-          data: errorData
-        });
         throw new Error(errorData.detail || errorData.message || JSON.stringify(errorData) || `API Error: ${response.status}`);
       }
 
@@ -138,13 +132,21 @@ class ApiService {
     let allUsers: any[] = [];
     let hasNext = true;
 
-    while (hasNext) {
-      const response = await this.request(`/users/?page=${page}`);
-      if (response.results) {
-        allUsers = [...allUsers, ...response.results];
-        hasNext = !!response.next;
-        page++;
-      } else {
+    // ЗАЩИТА: Собираем максимум 10 страниц, чтобы браузер не зависал
+    while (hasNext && page <= 10) {
+      try {
+        const response: any = await this.request(`/users/?page=${page}`);
+        if (response && response.results) {
+          allUsers = [...allUsers, ...response.results];
+          hasNext = !!response.next;
+          page++;
+        } else if (Array.isArray(response)) {
+          allUsers = [...allUsers, ...response];
+          hasNext = false;
+        } else {
+          hasNext = false;
+        }
+      } catch (e) {
         hasNext = false;
       }
     }
@@ -162,11 +164,7 @@ class ApiService {
   changePassword(oldPassword: string, newPassword: string, confirmPassword: string) {
     return this.request('/users/change-password/', {
       method: 'POST',
-      body: JSON.stringify({ 
-        old_password: oldPassword, 
-        new_password: newPassword, 
-        confirm_password: confirmPassword 
-      }),
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword, confirm_password: confirmPassword }),
     });
   }
 
@@ -178,9 +176,34 @@ class ApiService {
   }
 
   // ========== Задачи ==========
-  getTasks(params?: Record<string, string>) {
-    const query = params ? '?' + new URLSearchParams(params) : '';
-    return this.request(`/tasks/${query}`);
+  async getTasks(params?: Record<string, string>) {
+    let page = 1;
+    let allTasks: any[] = [];
+    let hasNext = true;
+    
+    const baseQuery = params ? new URLSearchParams(params).toString() : '';
+
+    // ЗАЩИТА: Максимум 10 страниц
+    while (hasNext && page <= 10) {
+      const query = baseQuery ? `?${baseQuery}&page=${page}` : `?page=${page}`;
+      try {
+        const response: any = await this.request(`/tasks/${query}`);
+        if (response && response.results) {
+          allTasks = [...allTasks, ...response.results];
+          hasNext = !!response.next;
+          page++;
+        } else if (Array.isArray(response)) {
+          allTasks = [...allTasks, ...response];
+          hasNext = false;
+        } else {
+          hasNext = false;
+        }
+      } catch (error) {
+        hasNext = false;
+      }
+    }
+    
+    return allTasks;
   }
 
   getTask(id: number) {
@@ -202,9 +225,7 @@ class ApiService {
   }
 
   deleteTask(id: number) {
-    return this.request(`/tasks/${id}/`, {
-      method: 'DELETE',
-    });
+    return this.request(`/tasks/${id}/`, { method: 'DELETE' });
   }
 
   moveTask(id: number, status: string, order?: number) {
@@ -226,22 +247,13 @@ class ApiService {
   uploadTaskFile(taskId: number, file: File, fileType: 'attachment' | 'submission') {
     const formData = new FormData();
     formData.append('file', file);
-    let endpoint = '';
-    if (fileType === 'attachment') {
-      endpoint = `/tasks/${taskId}/attachments/`;
-    } else {
-      endpoint = `/tasks/${taskId}/submission-attachments/`;
-    }
+    let endpoint = fileType === 'attachment' ? `/tasks/${taskId}/attachments/` : `/tasks/${taskId}/submission-attachments/`;
     return fetch(`${API_BASE_URL}${endpoint}`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.getToken()}`,
-      },
+      headers: { 'Authorization': `Bearer ${this.getToken()}` },
       body: formData,
     }).then(res => {
-      if (!res.ok) {
-        return res.text().then(text => { throw new Error(text); });
-      }
+      if (!res.ok) return res.text().then(text => { throw new Error(text); });
       return res.json();
     });
   }
@@ -251,9 +263,7 @@ class ApiService {
   }
 
   deleteTaskFile(fileId: number) {
-    return this.request(`/tasks/attachments/${fileId}/`, {
-      method: 'DELETE',
-    });
+    return this.request(`/tasks/attachments/${fileId}/`, { method: 'DELETE' });
   }
 
   // ========== Выполнение задания ==========
@@ -295,9 +305,7 @@ class ApiService {
     formData.append('file', file);
     return fetch(`${API_BASE_URL}/tasks/${taskId}/comments/${commentId}/attachments/`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.getToken()}`
-      },
+      headers: { 'Authorization': `Bearer ${this.getToken()}` },
       body: formData
     }).then(res => {
       if (!res.ok) throw new Error('Не удалось загрузить файл комментария');
@@ -313,9 +321,7 @@ class ApiService {
   }
 
   deleteTaskComment(commentId: number) {
-    return this.request(`/tasks/comments/${commentId}/`, {
-      method: 'DELETE',
-    });
+    return this.request(`/tasks/comments/${commentId}/`, { method: 'DELETE' });
   }
 
   // ========== Оргструктура ==========
@@ -346,9 +352,7 @@ class ApiService {
   }
 
   deleteUnit(id: number) {
-    return this.request(`/structure/units/${id}/`, {
-      method: 'DELETE',
-    });
+    return this.request(`/structure/units/${id}/`, { method: 'DELETE' });
   }
 
   movePersonnel(userId: number, targetUnitId: number | null) {
@@ -369,21 +373,15 @@ class ApiService {
   }
 
   markNotificationRead(id: number) {
-    return this.request(`/notifications/${id}/read/`, {
-      method: 'PATCH',
-    });
+    return this.request(`/notifications/${id}/read/`, { method: 'PATCH' });
   }
 
   markAllNotificationsRead() {
-    return this.request('/notifications/read-all/', {
-      method: 'POST',
-    });
+    return this.request('/notifications/read-all/', { method: 'POST' });
   }
 
   deleteNotification(id: number) {
-    return this.request(`/notifications/${id}/delete/`, {
-      method: 'DELETE',
-    });
+    return this.request(`/notifications/${id}/delete/`, { method: 'DELETE' });
   }
 
   getUnreadCount() {
@@ -401,15 +399,19 @@ class ApiService {
   }
 
   // ========== Автопланирование ==========
-  uploadDocument(file: File) {
+  async uploadDocument(file: File) {
     const formData = new FormData();
     formData.append('file', file);
-
-    return fetch(`${API_BASE_URL}/autoplan/upload/`, {
+    const response = await fetch(`${API_BASE_URL}/autoplan/upload/`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${this.getToken()}` },
       body: formData,
-    }).then(res => res.json());
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || errorData.error || `Ошибка ${response.status}: Доступ запрещен или файл неверного формата`);
+    }
+    return response.json();
   }
 
   getDocuments() {
@@ -424,12 +426,9 @@ class ApiService {
     return this.request(`/autoplan/documents/${id}/`, { method: 'DELETE' });
   }
 
-  generateTasks(documentId: number, selectedIndices: number[], priority: string, orgUnitId?: number, customEvents?: any[]) {
-    const payload: any = {
-      selected_indices: selectedIndices,
-      priority: priority,
-    };
-    if (orgUnitId) payload.org_unit_id = orgUnitId;
+  generateTasks(documentId: number, selectedIndices: number[], priority: string, orgUnitIds?: number[], customEvents?: any[]) {
+    const payload: any = { selected_indices: selectedIndices, priority: priority };
+    if (orgUnitIds && orgUnitIds.length > 0) payload.org_unit_ids = orgUnitIds;
     if (customEvents && customEvents.length) payload.custom_events = customEvents;
     return this.request(`/autoplan/documents/${documentId}/generate/`, {
       method: 'POST',
@@ -448,9 +447,7 @@ class ApiService {
   
   // ========== Автоматическое обновление статусов ==========
   async updatePlannedTasks() {
-    return this.request('/tasks/update-planned/', {
-      method: 'POST',
-    });
+    return this.request('/tasks/update-planned/', { method: 'POST' });
   }
 
   // ========== База Знаний ==========
@@ -460,17 +457,13 @@ class ApiService {
   }
 
   deleteKnowledgeDocument(id: number) {
-    return this.request(`/knowledge/${id}/`, {
-      method: 'DELETE',
-    });
+    return this.request(`/knowledge/${id}/`, { method: 'DELETE' });
   }
 
   uploadKnowledgeDocument(formData: FormData) {
     return fetch(`${API_BASE_URL}/knowledge/`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.getToken()}`,
-      },
+      headers: { 'Authorization': `Bearer ${this.getToken()}` },
       body: formData,
     }).then(async (res) => {
       if (!res.ok) {

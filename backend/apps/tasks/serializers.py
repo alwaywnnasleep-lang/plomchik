@@ -110,7 +110,6 @@ class TaskListSerializer(serializers.ModelSerializer):
     tags = serializers.JSONField(required=False, default=list)
     submission = serializers.SerializerMethodField()
     
-    # ДОБАВЛЕНО: Теперь бэкенд отдает эти данные сразу при загрузке доски
     subtasks = SubtaskSerializer(many=True, read_only=True)
     attachments = TaskAttachmentSerializer(many=True, read_only=True)
     comments = CommentSerializer(many=True, read_only=True)
@@ -118,15 +117,15 @@ class TaskListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = [
-            'id', 'title', 'status', 'priority', 'deadline',
+            'id', 'title', 'status', 'priority', 'deadline', 'start_date', 'end_date',
             'assigned_to', 'assignee_detail',
             'created_by', 'creator_detail',
             'org_unit', 'tags', 'created_at', 'order',
-            'submission', 'subtasks', 'attachments', 'comments' # ДОБАВЛЕНЫ СЮДА
+            'submission', 'subtasks', 'attachments', 'comments',
+            'is_archived', 'is_milestone'  # ФИКС: Добавлены новые поля
         ]
 
     def get_submission(self, obj):
-        # Безопасное извлечение отчета для каждой задачи
         sub = TaskSubmission.objects.filter(task=obj).first()
         if sub:
             return TaskSubmissionSerializer(sub, context=self.context).data
@@ -148,9 +147,10 @@ class TaskDetailSerializer(serializers.ModelSerializer):
             'id', 'title', 'description', 'status', 'priority',
             'assigned_to', 'assignee_detail',
             'created_by', 'creator_detail',
-            'org_unit', 'deadline', 'tags',
+            'org_unit', 'deadline', 'start_date', 'end_date', 'tags',
             'subtasks', 'attachments', 'comments', 'submission',
-            'created_at', 'updated_at', 'order'
+            'created_at', 'updated_at', 'order',
+            'is_archived', 'is_milestone'  # ФИКС: Добавлены новые поля
         ]
 
 
@@ -164,7 +164,8 @@ class TaskCreateSerializer(serializers.ModelSerializer):
         model = Task
         fields = [
             'id', 'title', 'description', 'status', 'priority',
-            'org_unit', 'assigned_to', 'deadline', 'tags', 'subtasks_data'
+            'org_unit', 'assigned_to', 'deadline', 'start_date', 'end_date',
+            'tags', 'subtasks_data', 'is_archived', 'is_milestone' # ФИКС: Добавлены новые поля
         ]
 
     def create(self, validated_data):

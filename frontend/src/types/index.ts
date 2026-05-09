@@ -93,6 +93,7 @@ export interface Task {
   start_date?: string;
   end_date?: string;
   is_milestone?: boolean;
+  is_archived?: boolean; // <--- ДОБАВЛЕНО
   subtasks?: { id: string; title: string; done: boolean }[];
   comments?: Comment[];
   attachments?: TaskFile[];

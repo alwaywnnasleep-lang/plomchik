@@ -1,21 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  GripVertical, Calendar, Plus, X, AlertTriangle,
-  Filter, Tag, MessageCircle, Send, Paperclip,
-  Image, FileText, Download, Edit2, Trash2,
-  CheckCircle, Upload, Paperclip as PaperclipIcon, UserPlus, Users, RefreshCw, Save
+  Calendar, Plus, X, AlertTriangle, Tag, MessageCircle, Send, Paperclip,
+  Image, FileText, Download, Edit2, Trash2, CheckCircle, Upload, Paperclip as PaperclipIcon, 
+  UserPlus, Users, RefreshCw, Save, Clock, Filter, Archive, ArrowLeft
 } from 'lucide-react';
-import type { Task, TaskStatus, Priority, Comment, User as UserType, TaskFile, TaskSubmission } from '@/types';
+import type { Task, TaskStatus, Priority, User as UserType, TaskFile } from '@/types';
 import { cn } from '@/utils/cn';
-import { v4 as uuidv4 } from 'uuid';
 import api from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
-
-interface KanbanBoardProps {
-  tasks: Task[];
-  onTasksChange: (tasks: Task[]) => void;
-  searchQuery: string;
-}
+import { parseSafeDate } from './AutoPlan';
 
 const columns: { id: TaskStatus; label: string; color: string; bg: string }[] = [
   { id: 'todo', label: 'К выполнению', color: 'border-blue-400', bg: 'bg-blue-50' },
@@ -31,48 +24,71 @@ const priorityConfig: Record<Priority, { label: string; color: string; bg: strin
   low: { label: 'Низкий', color: 'text-blue-700', bg: 'bg-blue-100' },
 };
 
-// ФИКС: Функция-переводчик. Превращает сырые данные Django (snake_case) в формат React (camelCase)
 const normalizeTask = (backendTask: any): Task => {
+  let parsedTags: string[] = [];
+  if (Array.isArray(backendTask.tags)) {
+    parsedTags = backendTask.tags;
+  } else if (typeof backendTask.tags === 'string') {
+    try {
+      parsedTags = JSON.parse(backendTask.tags.replace(/'/g, '"'));
+    } catch {
+      parsedTags = backendTask.tags.split(',').map((t: string) => t.trim()).filter(Boolean);
+    }
+  }
+
   return {
     ...backendTask,
     id: backendTask.id?.toString(),
-    title: backendTask.title || '',
+    title: backendTask.title || 'Без названия',
     description: backendTask.description || '',
-    status: backendTask.status || 'todo',
-    priority: backendTask.priority || 'medium',
-    // Мапим ID из змеиного_регистра Django в camelCase фронтенда
+    status: (backendTask.status || 'todo').toLowerCase() as TaskStatus,
+    priority: (backendTask.priority || 'medium').toLowerCase() as Priority,
     assigneeId: backendTask.assigned_to?.toString() || backendTask.assigneeId || '',
     creatorId: backendTask.created_by?.toString() || backendTask.creatorId || '',
     unitId: backendTask.org_unit?.toString() || backendTask.unitId || '',
-    tags: backendTask.tags || [],
-    createdAt: backendTask.created_at || backendTask.createdAt,
+    tags: parsedTags,
+    createdAt: backendTask.created_at || backendTask.createdAt || new Date().toISOString(),
     deadline: backendTask.deadline || '',
+    start_date: backendTask.start_date || '',
+    end_date: backendTask.end_date || '',
     subtasks: backendTask.subtasks || [],
     comments: backendTask.comments || [],
     attachments: backendTask.attachments || [],
-    submission: backendTask.submission || null
+    submission: backendTask.submission || null,
+    is_archived: backendTask.is_archived === true || String(backendTask.is_archived).toLowerCase() === 'true',
+    is_milestone: backendTask.is_milestone === true || String(backendTask.is_milestone).toLowerCase() === 'true',
   } as Task;
 };
 
-export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardProps) {
+export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   const { user } = useAuth();
+  
   const [draggedTask, setDraggedTask] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [filterUnit, setFilterUnit] = useState<string>('all');
-  const [filterPriority, setFilterPriority] = useState<string>('all');
-  const [showFilters, setShowFilters] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
+  
   const [users, setUsers] = useState<UserType[]>([]);
   const [units, setUnits] = useState<any[]>([]);
 
+  const [filters, setFilters] = useState({ unit: 'all', onlyMyTasks: false, deadline: 'all' });
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
+  const [extraUsers, setExtraUsers] = useState<Record<string, any>>({});
+
   const onTasksChangeRef = useRef(onTasksChange);
-  useEffect(() => {
-    onTasksChangeRef.current = onTasksChange;
-  }, [onTasksChange]);
+  const draggedTaskRef = useRef(draggedTask);
+  
+  useEffect(() => { onTasksChangeRef.current = onTasksChange; }, [onTasksChange]);
+  useEffect(() => { draggedTaskRef.current = draggedTask; }, [draggedTask]);
 
   useEffect(() => {
-    loadUsers();
-    loadUnits();
+    api.getAllUsers().then((res: any) => {
+      setUsers(Array.isArray(res) ? res : (res.results || []));
+    }).catch(console.error);
+
+    api.getAvailableUnits().then((res: any) => {
+      setUnits(Array.isArray(res) ? res : (res.results || []));
+    }).catch(console.error);
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//localhost:8000/ws/tasks/`;
@@ -81,110 +97,141 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
 
     const connectWs = () => {
       ws = new WebSocket(wsUrl);
-
       ws.onmessage = async (event) => {
+        if (draggedTaskRef.current) return; 
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'task_update') {
-            const response = await api.getTasks();
+            const response: any = await api.getTasks();
             const rawTasks = Array.isArray(response) ? response : (response.results || []);
-            
-            // ФИКС: Прогоняем все пришедшие по вебсокету задачи через переводчик
             const freshTasks = rawTasks.map(normalizeTask);
-            
             onTasksChangeRef.current(freshTasks);
-            
-            setSelectedTask(prev => {
-              if (!prev) return null;
-              const updated = freshTasks.find((t: Task) => t.id === prev.id);
-              return updated || null;
-            });
+            setSelectedTask(prev => prev ? freshTasks.find((t: Task) => t.id === prev.id) || null : null);
           }
         } catch (e) {
-          console.error('WebSocket Error processing message:', e);
+          console.error('WebSocket Error:', e);
         }
       };
-
-      ws.onclose = () => {
-        reconnectTimeout = setTimeout(connectWs, 3000);
-      };
-      
-      ws.onerror = () => {
-        ws.close();
-      };
+      ws.onclose = () => { reconnectTimeout = setTimeout(connectWs, 3000); };
+      ws.onerror = () => { ws.close(); };
     };
 
     connectWs();
-
     return () => {
       clearTimeout(reconnectTimeout);
       if (ws) ws.close();
     };
-  }, []);
+  }, []); 
 
-  const loadUsers = async () => {
-    try {
-      const usersData = await api.getAllUsers();
-      setUsers(usersData);
-    } catch (error) {
-      console.error('Failed to load users:', error);
+  const filteredTasks = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const nextWeek = new Date(today);
+    nextWeek.setDate(today.getDate() + 7);
+
+    return tasks.filter((t: Task) => {
+      const matchesSearch = searchQuery === '' ||
+        t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (t.description && t.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (t.tags && t.tags.some(tag => String(tag).toLowerCase().includes(searchQuery.toLowerCase())));
+
+      const matchesUnit = filters.unit === 'all' || t.unitId === filters.unit;
+      const matchesMy = !filters.onlyMyTasks || t.assigneeId === user?.id?.toString() || t.creatorId === user?.id?.toString();
+      
+      let matchesDeadline = true;
+      if (filters.deadline !== 'all') {
+        const taskDate = parseSafeDate(t.deadline);
+        if (!taskDate) {
+          matchesDeadline = false;
+        } else {
+          const taskDay = new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate());
+          
+          if (filters.deadline === 'overdue') {
+            matchesDeadline = taskDate < now && t.status !== 'done';
+          } else if (filters.deadline === 'today') {
+            matchesDeadline = taskDay.getTime() === today.getTime() && t.status !== 'done';
+          } else if (filters.deadline === 'week') {
+            matchesDeadline = taskDay >= today && taskDay <= nextWeek && t.status !== 'done';
+          }
+        }
+      }
+
+      return matchesSearch && matchesUnit && matchesMy && matchesDeadline;
+    });
+  }, [tasks, searchQuery, filters, user?.id]);
+
+  const activeFiltersCount = (filters.unit !== 'all' ? 1 : 0) + (filters.onlyMyTasks ? 1 : 0) + (filters.deadline !== 'all' ? 1 : 0);
+
+  useEffect(() => {
+    const idsToFetch = new Set<string>();
+    filteredTasks.forEach((t: Task) => {
+      if (t.assigneeId && !users.some(u => String(u.id) === t.assigneeId) && !extraUsers[t.assigneeId]) {
+        idsToFetch.add(t.assigneeId);
+      }
+      if (t.creatorId && !users.some(u => String(u.id) === t.creatorId) && !extraUsers[t.creatorId]) {
+        idsToFetch.add(t.creatorId);
+      }
+    });
+
+    if (idsToFetch.size > 0) {
+      idsToFetch.forEach(id => {
+        setExtraUsers(prev => {
+          if (prev[id]) return prev;
+          api.getUser(Number(id))
+            .then(userObj => setExtraUsers(current => ({ ...current, [id]: userObj })))
+            .catch(() => setExtraUsers(current => ({ ...current, [id]: { _error: true } })));
+          return { ...prev, [id]: { _fetching: true } };
+        });
+      });
     }
-  };
+  }, [filteredTasks, users]);
 
-  const loadUnits = async () => {
-    try {
-      // Используем новый типизированный метод
-      const unitsData = await api.getAvailableUnits(); 
-      setUnits(Array.isArray(unitsData) ? unitsData : (unitsData.results || []));
-    } catch (error) {
-      console.error('Failed to load units:', error);
-    }
-  };
-
-  const filteredTasks = tasks.filter(t => {
-    const matchesSearch = searchQuery === '' ||
-      t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()));
-    const matchesUnit = filterUnit === 'all' || t.unitId === filterUnit;
-    const matchesPriority = filterPriority === 'all' || t.priority === filterPriority;
-    return matchesSearch && matchesUnit && matchesPriority;
-  });
-
-  const handleDragStart = (taskId: string) => {
+  const handleDragStart = (e: React.DragEvent, taskId: string) => {
     setDraggedTask(taskId);
+    e.dataTransfer.setData('text/plain', taskId);
+    e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleDrop = async (status: TaskStatus) => {
-    if (draggedTask) {
-      const task = tasks.find(t => t.id === draggedTask);
-      if (!task) return;
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
 
-      const isLeader = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(user?.role || '');
-      const isCreator = task.creatorId === user?.id?.toString();
+  const handleDrop = async (e: React.DragEvent, status: TaskStatus) => {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData('text/plain');
+    if (!taskId) return;
 
-      if (!isLeader && !isCreator && (status === 'review' || status === 'done')) {
-        alert('Вы не можете вручную перевести задачу на проверку или в "Выполнено". Откройте её и прикрепите отчет во вкладке "Выполнение".');
-        setDraggedTask(null);
-        return;
-      }
-
-      if (!task.assigneeId && (status === 'review' || status === 'done')) {
-        alert('Нельзя отправить на проверку или завершить задачу, у которой нет исполнителя.');
-        setDraggedTask(null);
-        return;
-      }
-
-      const updatedTasks = tasks.map(t => t.id === draggedTask ? { ...t, status } : t);
-      onTasksChange(updatedTasks);
-
-      try {
-        await api.moveTask(parseInt(draggedTask), status, 0);
-      } catch (error) {
-        onTasksChange(tasks);
-        alert('Ошибка при перемещении задачи.');
-      }
+    const task = tasks.find((t: Task) => t.id === taskId);
+    if (!task || task.status === status) {
       setDraggedTask(null);
+      return;
+    }
+
+    const isLeader = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(user?.role || '');
+    const isCreator = task.creatorId === user?.id?.toString();
+
+    if (!isLeader && !isCreator && (status === 'review' || status === 'done')) {
+      alert('Вы не можете вручную перевести задачу на проверку или в "Выполнено". Откройте её и прикрепите отчет во вкладке "Выполнение".');
+      setDraggedTask(null);
+      return;
+    }
+
+    if (!task.assigneeId && (status === 'review' || status === 'done')) {
+      alert('Нельзя отправить на проверку или завершить задачу, у которой нет исполнителя.');
+      setDraggedTask(null);
+      return;
+    }
+
+    const updatedTasks = tasks.map((t: Task) => t.id === taskId ? { ...t, status } : t);
+    onTasksChange(updatedTasks);
+    setDraggedTask(null);
+
+    try {
+      await api.moveTask(parseInt(taskId), status, 0);
+    } catch (error) {
+      onTasksChange(tasks); 
+      alert('Ошибка при перемещении задачи.');
     }
   };
 
@@ -212,8 +259,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
         }
       }
 
-      // СРАЗУ запрашиваем свежий список и нормализуем его
-      const response = await api.getTasks();
+      const response: any = await api.getTasks();
       const rawTasks = Array.isArray(response) ? response : (response.results || []);
       const freshTasks = rawTasks.map(normalizeTask);
       
@@ -225,97 +271,288 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
     }
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Канбан-доска</h1>
-          <p className="text-sm text-slate-500 mt-1">Управление задачами подразделений (Real-Time)</p>
+  const handleToggleArchive = async (taskId: string, archive: boolean) => {
+    try {
+      await api.updateTask(parseInt(taskId), { is_archived: archive });
+      const updatedTasks = tasks.map((t: Task) => t.id === taskId ? { ...t, is_archived: archive } : t);
+      onTasksChange(updatedTasks);
+      setSelectedTask(null);
+    } catch (error) {
+      alert('Ошибка при изменении статуса архива');
+    }
+  };
+
+  if (showArchive) {
+    const archivedTasks = filteredTasks.filter((t: Task) => t.is_archived);
+
+    return (
+      <div className="space-y-4 relative bg-white border border-slate-200 rounded-md shadow-sm p-6 min-h-[600px]">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-4 mb-4">
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setShowArchive(false)}
+              className="p-1.5 border border-slate-200 text-slate-500 rounded hover:bg-slate-50 transition-colors"
+              title="Вернуться к доске"
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <h2 className="text-lg font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <Archive size={18} className="text-slate-500" />
+              Архив задач
+            </h2>
+          </div>
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+            В архиве: {archivedTasks.length}
+          </span>
         </div>
+
+        {archivedTasks.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">ID</th>
+                  <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Задача</th>
+                  <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Подразделение</th>
+                  <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Создана</th>
+                  <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-right">Действия</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {archivedTasks.map((task: Task) => {
+                  const unit = units.find((u: any) => String(u.id) === String(task.unitId));
+                  return (
+                    <tr key={task.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-4 text-xs text-slate-400 font-mono">#{task.id}</td>
+                      <td className="py-3 px-4">
+                        <button 
+                          onClick={() => setSelectedTask(task)}
+                          className="font-bold text-slate-700 hover:text-green-600 text-left transition-colors"
+                        >
+                          {task.title}
+                        </button>
+                      </td>
+                      <td className="py-3 px-4 text-xs font-medium text-slate-600">{unit?.name || '—'}</td>
+                      <td className="py-3 px-4 text-xs font-medium text-slate-600">
+                        {new Date(task.createdAt).toLocaleDateString('ru-RU')}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button 
+                          onClick={() => handleToggleArchive(task.id, false)}
+                          className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 border border-slate-300 text-slate-600 rounded hover:bg-slate-100 transition-colors"
+                        >
+                          Вернуть
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <Archive size={48} className="text-slate-300 mb-4" />
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-600">Архив пуст</h3>
+            <p className="text-xs font-medium text-slate-400 mt-2">Здесь будут отображаться завершенные задачи, которые вы убрали с доски.</p>
+          </div>
+        )}
+
+        {selectedTask && (
+          <TaskDetailModal
+            task={selectedTask}
+            users={users}
+            units={units}
+            currentUser={user}
+            onClose={() => setSelectedTask(null)}
+            onUpdate={(updated) => {
+              onTasksChange(tasks.map((t: Task) => t.id === updated.id ? updated : t));
+              setSelectedTask(updated);
+            }}
+            onDelete={async (id) => {
+              try {
+                await api.deleteTask(parseInt(id));
+                onTasksChange(tasks.filter((t: Task) => t.id !== id));
+                setSelectedTask(null);
+              } catch (error) {
+                alert('Ошибка при удалении задачи');
+              }
+            }}
+            onToggleArchive={handleToggleArchive}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 relative">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Активных задач: {filteredTasks.filter((t: Task) => !t.is_archived && !t.is_milestone && !(t.tags || []).some(tag => String(tag).toLowerCase() === 'мероприятие')).length}
+        </span>
+        
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors',
-              showFilters ? 'border-green-700 text-green-700 bg-green-50' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-            )}
+          <button 
+            onClick={() => setShowArchive(true)}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-md transition-colors shadow-sm"
           >
-            <Filter size={14} />
-            Фильтры
+            <Archive size={14} />
+            Архив
           </button>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors"
+
+          <div className="relative">
+            <button 
+              onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)} 
+              className={cn(
+                "flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border rounded-md transition-colors shadow-sm",
+                activeFiltersCount > 0 
+                  ? "bg-green-50 border-green-200 text-green-700" 
+                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+              )}
+            >
+              <Filter size={14} />
+              Фильтры
+              {activeFiltersCount > 0 && (
+                <span className="flex items-center justify-center w-4 h-4 bg-green-600 text-white text-[9px] rounded-full ml-1">
+                  {activeFiltersCount}
+                </span>
+              )}
+            </button>
+
+            {isFilterPanelOpen && (
+              <div className="absolute right-0 top-full mt-2 w-[300px] bg-white rounded-md shadow-xl border border-slate-200 p-5 z-50">
+                <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Параметры</h3>
+                  {activeFiltersCount > 0 && (
+                    <button 
+                      onClick={() => setFilters({ unit: 'all', onlyMyTasks: false, deadline: 'all' })}
+                      className="text-[10px] font-bold uppercase text-red-500 hover:text-red-700"
+                    >
+                      Сбросить
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Подразделение</label>
+                    <select
+                      value={filters.unit}
+                      onChange={e => setFilters({ ...filters, unit: e.target.value })}
+                      className="w-full text-sm border border-slate-200 rounded px-3 py-2 bg-slate-50 hover:bg-white focus:outline-none focus:border-green-500"
+                    >
+                      <option value="all">Все подразделения</option>
+                      {units.map((u: any) => (
+                        <option key={u.id} value={u.id.toString()}>{u.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Сроки</label>
+                    <select
+                      value={filters.deadline}
+                      onChange={e => setFilters({ ...filters, deadline: e.target.value })}
+                      className="w-full text-sm border border-slate-200 rounded px-3 py-2 bg-slate-50 hover:bg-white focus:outline-none focus:border-green-500"
+                    >
+                      <option value="all">Всё время</option>
+                      <option value="overdue">⚠️ Просроченные</option>
+                      <option value="today">🔥 Сегодня</option>
+                      <option value="week">📅 На этой неделе</option>
+                    </select>
+                  </div>
+
+                  <label className="flex items-center gap-3 cursor-pointer p-2 -ml-2 hover:bg-slate-50 rounded">
+                    <input 
+                      type="checkbox" 
+                      checked={filters.onlyMyTasks}
+                      onChange={e => setFilters({ ...filters, onlyMyTasks: e.target.checked })}
+                      className="w-4 h-4 rounded border-slate-300 text-green-600 focus:ring-green-600"
+                    />
+                    <span className="text-xs font-bold uppercase text-slate-600">Мои задачи</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button 
+            onClick={() => setShowAddModal(true)} 
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors shadow-sm"
           >
-            <Plus size={14} />
-            Новая задача
+            <Plus size={14} /> Новая задача
           </button>
         </div>
       </div>
 
-      {showFilters && (
-        <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap gap-4">
-          <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Подразделение</label>
-            <select
-              value={filterUnit}
-              onChange={e => setFilterUnit(e.target.value)}
-              className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-green-700/30"
-            >
-              <option value="all">Все подразделения</option>
-              {units.map((u: any) => (
-                <option key={u.id} value={u.id.toString()}>{u.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Приоритет</label>
-            <select
-              value={filterPriority}
-              onChange={e => setFilterPriority(e.target.value)}
-              className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-green-700/30"
-            >
-              <option value="all">Все приоритеты</option>
-              <option value="critical">Критический</option>
-              <option value="high">Высокий</option>
-              <option value="medium">Средний</option>
-              <option value="low">Низкий</option>
-            </select>
-          </div>
-        </div>
+      {isFilterPanelOpen && (
+        <div className="fixed inset-0 z-40" onClick={() => setIsFilterPanelOpen(false)}></div>
       )}
 
-      <div className="flex gap-4 overflow-x-auto pb-4">
+      {/* ДОСКА С 4 КОЛОНКАМИ */}
+      <div className="flex gap-4 overflow-x-auto pb-4 items-start">
         {columns.map(col => {
-          const colTasks = filteredTasks.filter(t => t.status === col.id);
+          const colTasks = filteredTasks.filter((t: Task) => {
+            // ЛОГИКА ФИЛЬТРАЦИИ 1: Полностью скрываем Мероприятия с доски (ориентируемся на тег)
+            const isEvent = t.is_milestone || (t.tags || []).some(tag => String(tag).toLowerCase() === 'мероприятие');
+            if (isEvent || t.is_archived) return false;
+            
+            const tStatus = (t.status || 'todo').toLowerCase();
+            
+            // ЛОГИКА ФИЛЬТРАЦИИ 2: Для колонки "К выполнению" скрываем далекие задачи
+            if (col.id === 'todo') {
+              const parsedD = parseSafeDate(t.deadline || t.start_date || t.createdAt);
+              if (parsedD) {
+                 const today = new Date();
+                 today.setHours(12, 0, 0, 0);
+                 const taskDate = new Date(parsedD);
+                 taskDate.setHours(12, 0, 0, 0);
+                 
+                 const diffDays = Math.ceil((taskDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                 if (diffDays > 2) {
+                     return false; // Скрываем, если до дедлайна больше 2 дней
+                 }
+              }
+              return ['todo', 'new', 'pending', 'planned'].includes(tStatus);
+            }
+            
+            return tStatus === col.id;
+          });
+
           return (
             <div
               key={col.id}
-              className="flex-1 min-w-[300px] max-w-[400px]"
-              onDragOver={e => e.preventDefault()}
-              onDrop={() => handleDrop(col.id)}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleDrop(e, col.id)}
+              className="flex-1 min-w-[320px] max-w-[400px] bg-slate-100/80 rounded-md border border-slate-200 flex flex-col max-h-[80vh]"
             >
-              <div className={cn('rounded-xl border border-slate-200 bg-slate-50/50 min-h-[500px]')}>
-                <div className={cn('px-4 py-3 border-b-2', col.color)}>
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-700">{col.label}</h3>
-                    <span className={cn('text-xs font-bold px-2 py-0.5 rounded-full', col.bg, 'text-slate-600')}>
-                      {colTasks.length}
-                    </span>
+              <div className={cn('px-4 py-3 border-b border-slate-200 bg-white rounded-t-md', col.color, 'border-t-4')}>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-700">{col.label}</h3>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                    {colTasks.length}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-2 flex-1 overflow-y-auto space-y-2">
+                {colTasks.map((task: Task) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    users={users}
+                    extraUsers={extraUsers}
+                    units={units}
+                    onDragStart={(e: any) => handleDragStart(e, task.id)}
+                    onClick={() => setSelectedTask(task)}
+                  />
+                ))}
+                {colTasks.length === 0 && (
+                  <div className="p-4 text-center text-sm text-slate-400 border-2 border-dashed border-slate-200 rounded-md">
+                    Нет задач
                   </div>
-                </div>
-                <div className="p-2 space-y-2">
-                  {colTasks.map(task => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      users={users}
-                      units={units}
-                      onDragStart={() => handleDragStart(task.id)}
-                      onClick={() => setSelectedTask(task)}
-                    />
-                  ))}
-                </div>
+                )}
               </div>
             </div>
           );
@@ -339,72 +576,55 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: KanbanBoardPr
           currentUser={user}
           onClose={() => setSelectedTask(null)}
           onUpdate={(updated) => {
-            onTasksChange(tasks.map(t => t.id === updated.id ? updated : t));
+            onTasksChange(tasks.map((t: Task) => t.id === updated.id ? updated : t));
             setSelectedTask(updated);
           }}
           onDelete={async (id) => {
             try {
               await api.deleteTask(parseInt(id));
-              onTasksChange(tasks.filter(t => t.id !== id));
+              onTasksChange(tasks.filter((t: Task) => t.id !== id));
               setSelectedTask(null);
             } catch (error: any) {
               if (error.message?.includes('No Task matches')) {
-                onTasksChange(tasks.filter(t => t.id !== id));
+                onTasksChange(tasks.filter((t: Task) => t.id !== id));
                 setSelectedTask(null);
               } else {
                 alert('Ошибка при удалении задачи');
               }
             }
           }}
+          onToggleArchive={handleToggleArchive}
         />
       )}
     </div>
   );
 }
 
-// ========== TaskCard Component ==========
-function TaskCard({ task, users, units, onDragStart, onClick }: {
-  task: Task;
-  users: UserType[];
-  units: any[];
-  onDragStart: () => void;
-  onClick: () => void;
-}) {
-  const assignee = users.find(u => u.id.toString() === task.assigneeId);
-  const unit = units.find(u => u.id.toString() === task.unitId);
-  const isOverdue = new Date(task.deadline) < new Date() && task.status !== 'done';
-  const pConfig = priorityConfig[task.priority];
-  const subtasksDone = task.subtasks?.filter(s => s.done).length ?? 0;
-  const subtasksTotal = task.subtasks?.length ?? 0;
-  const commentsCount = task.comments?.length || 0;
-  const attachmentsCount = task.attachments?.length || 0;
+// ... остальной код (TaskCard, TaskDetailModal, TaskComments, TaskSubmission, AddTaskModal) остается без изменений
+function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any) {
+  const getSafeName = (id: string, fallback: any) => {
+    if (!id) return 'Не назначен';
+    const user = users.find((u: any) => String(u.id) === id) || extraUsers[id];
+    if (user && !user._fetching && !user._error) {
+      return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim() || 'Сотрудник';
+    }
+    if (fallback && fallback.full_name) return fallback.full_name;
+    return user?._fetching ? 'Загрузка...' : `ID ${id}`;
+  };
+
+  const assigneeName = getSafeName(task.assigneeId, task.assignee);
+  const creatorName = getSafeName(task.creatorId, task.creator);
+  const unit = units.find((u: any) => String(u.id) === String(task.unitId));
+
+  const parsedDeadline = parseSafeDate(task.deadline);
+  const isOverdue = parsedDeadline && parsedDeadline < new Date() && task.status !== 'done';
   
-  // Благодаря normalizeTask это условие теперь работает идеально
+  const pConfig = priorityConfig[task.priority as Priority] || priorityConfig['medium'];
   const isUnassigned = !task.assigneeId;
 
-  const getAssigneeInitials = () => {
-    if (!assignee) return '';
-    const fullName = assignee.fullName || `${assignee.last_name || ''} ${assignee.first_name || ''}`;
-    return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
-  };
-
-  const getStatusIcon = () => {
-    if (!task.submission) return null;
-    switch (task.submission.status) {
-      case 'approved': return <CheckCircle size={8} className="text-green-700" />;
-      case 'rejected': return <X size={8} className="text-red-700" />;
-      default: return <Send size={8} className="text-yellow-700" />;
-    }
-  };
-
-  const getStatusText = () => {
-    if (!task.submission) return null;
-    switch (task.submission.status) {
-      case 'approved': return 'Принято';
-      case 'rejected': return 'Доработка';
-      default: return 'На проверке';
-    }
-  };
+  const subtasksTotal = task.subtasks?.length || 0;
+  const subtasksDone = task.subtasks?.filter((s: any) => s.done).length || 0;
+  const subtasksProgress = subtasksTotal > 0 ? (subtasksDone / subtasksTotal) * 100 : 0;
 
   return (
     <div
@@ -412,119 +632,93 @@ function TaskCard({ task, users, units, onDragStart, onClick }: {
       onDragStart={onDragStart}
       onClick={onClick}
       className={cn(
-        "bg-white rounded-lg border p-3 cursor-pointer hover:shadow-md transition-all group",
-        isUnassigned ? "border-dashed border-slate-400 bg-slate-50/80" : "border-slate-200 hover:border-slate-300"
+        "bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing hover:border-slate-300 shadow-sm",
+        isUnassigned ? "border-dashed border-slate-300 bg-slate-50" : "border-slate-200"
       )}
     >
-      <div className="flex items-start gap-2">
-        <GripVertical size={14} className="text-slate-300 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
-            <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded', pConfig.bg, pConfig.color)}>
-              {pConfig.label}
-            </span>
-            {isOverdue && (
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700 flex items-center gap-0.5">
-                <AlertTriangle size={8} /> Просрочено
-              </span>
-            )}
-            {isUnassigned && (
-               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 flex items-center gap-0.5">
-                 <UserPlus size={8} /> Свободная
-               </span>
-            )}
+      <div className="flex items-start justify-between mb-2 gap-2">
+        <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded truncate max-w-[70%]">
+          {unit?.name || 'Подразделение'}
+        </span>
+        <span className="text-[10px] font-mono text-slate-400 shrink-0">#{task.id}</span>
+      </div>
+
+      <h4 className="text-sm font-bold text-slate-800 leading-snug mb-1">{task.title}</h4>
+      
+      {task.description && (
+        <p className="text-[11px] text-slate-500 line-clamp-2 mb-3 leading-relaxed">
+          {task.description}
+        </p>
+      )}
+
+      <div className="bg-slate-50 border border-slate-100 rounded p-2 mb-3 grid grid-cols-2 gap-2">
+        <div>
+          <div className="text-[9px] text-slate-400 uppercase font-bold mb-0.5">Постановщик</div>
+          <div className="text-xs font-medium text-slate-700 truncate" title={creatorName}>{creatorName}</div>
+        </div>
+        <div>
+          <div className="text-[9px] text-slate-400 uppercase font-bold mb-0.5">Исполнитель</div>
+          <div className={cn("text-xs font-medium truncate", isUnassigned ? "text-amber-600" : "text-slate-700")} title={assigneeName}>
+            {isUnassigned ? 'Свободная задача' : assigneeName}
           </div>
+        </div>
+      </div>
 
-          <h4 className="text-sm font-medium text-slate-800 mb-1 line-clamp-2">{task.title}</h4>
+      <div className="space-y-2 mb-3">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded', pConfig.bg, pConfig.color)}>
+            {pConfig.label}
+          </span>
+          {task.tags?.slice(0, 2).map((tag: string) => (
+            <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">{tag}</span>
+          ))}
+        </div>
 
-          {task.submission && (
-            <div className="mt-1 mb-2">
-              <div className={cn(
-                'text-[9px] px-1.5 py-0.5 rounded-full inline-flex items-center gap-1',
-                task.submission.status === 'approved' ? 'bg-green-100 text-green-700' :
-                task.submission.status === 'rejected' ? 'bg-red-100 text-red-700' :
-                'bg-yellow-100 text-yellow-700'
-              )}>
-                {getStatusIcon()}
-                {getStatusText()}
-              </div>
+        {subtasksTotal > 0 && (
+          <div className="pt-1">
+            <div className="flex justify-between text-[10px] text-slate-500 mb-1 font-bold">
+              <span>Подзадачи</span>
+              <span>{subtasksDone} / {subtasksTotal}</span>
             </div>
-          )}
-
-          {task.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-2">
-              {task.tags.slice(0, 3).map(tag => (
-                <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded flex items-center gap-0.5">
-                  <Tag size={8} />{tag}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {subtasksTotal > 0 && (
-            <div className="mb-2">
-              <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
-                <span>Подзадачи</span>
-                <span>{subtasksDone}/{subtasksTotal}</span>
-              </div>
-              <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-green-700 rounded-full"
-                  style={{ width: `${(subtasksDone / subtasksTotal) * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between mt-2">
-            <div className="flex items-center gap-1 text-[10px] text-slate-400">
-              <Calendar size={10} />
-              <span className={isOverdue ? 'text-red-500 font-medium' : ''}>
-                {new Date(task.deadline).toLocaleString('ru-RU', {
-                  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
-                })}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              {attachmentsCount > 0 && (
-                <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
-                  <PaperclipIcon size={10} /> {attachmentsCount}
-                </span>
-              )}
-              {commentsCount > 0 && (
-                <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
-                  <MessageCircle size={10} /> {commentsCount}
-                </span>
-              )}
-              {unit && (
-                <span className="text-[9px] px-1 py-0.5 bg-slate-100 text-slate-500 rounded">
-                  {unit.name}
-                </span>
-              )}
-              {assignee ? (
-                <div
-                  className="w-5 h-5 rounded-full flex items-center justify-center text-white text-[8px] font-bold"
-                  style={{ backgroundColor: `hsl(${parseInt(assignee.id.toString()) * 100 % 360}, 70%, 50%)` }}
-                  title={`${assignee.rank || ''} ${assignee.fullName || ''}`}
-                >
-                  {getAssigneeInitials()}
-                </div>
-              ) : (
-                <div className="w-5 h-5 rounded-full border border-dashed border-slate-400 flex items-center justify-center bg-slate-50 text-slate-400" title="Никто не назначен">
-                  <UserPlus size={10} />
-                </div>
-              )}
+            <div className="h-1.5 bg-slate-200 rounded overflow-hidden">
+              <div className="h-full bg-green-600 rounded" style={{ width: `${subtasksProgress}%` }} />
             </div>
           </div>
+        )}
+
+        {task.submission && (
+          <div className={cn(
+            'text-[10px] px-2 py-1 rounded border font-bold flex items-center gap-1.5 mt-1', 
+            task.submission.status === 'approved' ? 'bg-green-50 text-green-700 border-green-200' : 
+            task.submission.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-200' : 
+            'bg-yellow-50 text-yellow-700 border-yellow-200'
+          )}>
+            {task.submission.status === 'approved' ? <CheckCircle size={12}/> : task.submission.status === 'rejected' ? <X size={12}/> : <Clock size={12}/>}
+            {task.submission.status === 'approved' ? 'Отчет принят' : task.submission.status === 'rejected' ? 'Возвращено на доработку' : 'Отчет на проверке'}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between border-t border-slate-100 pt-2">
+        <div className={cn("flex items-center gap-1.5 text-[11px] font-bold", isOverdue ? "text-red-600" : "text-slate-600")}>
+          <Calendar size={12} />
+          {parsedDeadline ? parsedDeadline.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Без срока'}
+        </div>
+
+        <div className="flex items-center gap-2.5 text-slate-400">
+          {task.comments?.length > 0 && (
+            <span className="flex items-center gap-0.5 text-[11px] font-bold"><MessageCircle size={12} />{task.comments.length}</span>
+          )}
+          {task.attachments?.length > 0 && (
+            <span className="flex items-center gap-0.5 text-[11px] font-bold"><PaperclipIcon size={12} />{task.attachments.length}</span>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-// ========== TaskDetailModal Component ==========
-function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, onDelete }: {
+function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, onDelete, onToggleArchive }: {
   task: Task;
   users: UserType[];
   units: any[];
@@ -532,6 +726,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
   onClose: () => void;
   onUpdate: (t: Task) => void;
   onDelete: (id: string) => void;
+  onToggleArchive: (id: string, archive: boolean) => void;
 }) {
   const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'submission' | 'attachments'>('details');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
@@ -542,13 +737,13 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
     title: task.title,
     description: task.description,
     priority: task.priority,
-    deadline: task.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''
+    deadline: task.deadline ? (parseSafeDate(task.deadline)?.toISOString().slice(0, 16) || '') : ''
   });
 
   const assignee = users.find(u => u.id.toString() === task.assigneeId);
   const creator = users.find(u => u.id.toString() === task.creatorId);
   const unit = units.find(u => u.id.toString() === task.unitId);
-  const pConfig = priorityConfig[task.priority];
+  const pConfig = priorityConfig[task.priority] || priorityConfig['medium'];
 
   const isLeader = ['commander', 'deputy_commander', 'department_head', 'group_head'].includes(currentUser?.role || '');
   const isCreator = currentUser?.id?.toString() === task.creatorId?.toString();
@@ -597,7 +792,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
   };
 
   const getAssigneeFullName = (user: any) => {
-    return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim();
+    return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim() || 'Сотрудник';
   };
 
   const getAssigneeInitials = (user: any) => {
@@ -613,7 +808,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
           const fileName = file.fileName || file.filename || 'Файл';
           const fileUrl = file.fileUrl || file.file;
           return (
-            <div key={file.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+            <div key={file.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-md">
               {fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i) ? (
                 <Image size={16} className="text-slate-400" />
               ) : (
@@ -632,24 +827,31 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
     );
   };
 
+  const parsedModalDeadline = parseSafeDate(task.deadline);
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-md w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="p-6 pb-2 border-b border-slate-200">
           <div className="flex items-start justify-between">
             <div className="flex-1 pr-4">
               <div className="flex items-center gap-2 mb-2">
-                <span className={cn('text-xs font-medium px-2 py-0.5 rounded', pConfig.bg, pConfig.color)}>
+                <span className={cn('text-xs font-bold px-2 py-0.5 rounded', pConfig.bg, pConfig.color)}>
                   {pConfig.label}
                 </span>
-                <span className="text-xs text-slate-400">#{String(task.id || '').slice(0, 6)}</span>
+                {task.is_archived && (
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600 flex items-center gap-1">
+                    <Archive size={12} /> Архив
+                  </span>
+                )}
+                <span className="text-xs text-slate-400 font-mono">#{String(task.id || '').slice(0, 6)}</span>
               </div>
               
               {isEditingTask ? (
                 <input 
                   value={editData.title}
                   onChange={e => setEditData({...editData, title: e.target.value})}
-                  className="w-full text-lg font-bold border-b-2 border-green-700 bg-slate-50 px-2 py-1 outline-none mb-2"
+                  className="w-full text-lg font-bold border-b-2 border-green-600 bg-slate-50 px-2 py-1 outline-none mb-2"
                 />
               ) : (
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -657,8 +859,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                   {(isCreator || isLeader) && (
                     <button 
                       onClick={() => setIsEditingTask(true)} 
-                      className="text-slate-300 hover:text-green-700 transition-colors"
-                      title="Редактировать задачу"
+                      className="text-slate-300 hover:text-green-600"
+                      title="Редактировать"
                     >
                       <Edit2 size={16} />
                     </button>
@@ -675,8 +877,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('details')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative whitespace-nowrap',
-                activeTab === 'details' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-xs uppercase tracking-wider font-bold relative whitespace-nowrap',
+                activeTab === 'details' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
               Детали
@@ -684,13 +886,13 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('comments')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1 whitespace-nowrap',
-                activeTab === 'comments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1 whitespace-nowrap',
+                activeTab === 'comments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
               Обсуждение
               {task.comments && task.comments.length > 0 && (
-                <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full ml-1">
+                <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded ml-1">
                   {task.comments.length}
                 </span>
               )}
@@ -698,14 +900,14 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('attachments')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1 whitespace-nowrap',
-                activeTab === 'attachments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1 whitespace-nowrap',
+                activeTab === 'attachments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
-              <PaperclipIcon size={16} />
+              <PaperclipIcon size={14} />
               Вложения
               {task.attachments && task.attachments.length > 0 && (
-                <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full ml-1">
+                <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded ml-1">
                   {task.attachments.length}
                 </span>
               )}
@@ -713,15 +915,15 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('submission')}
               className={cn(
-                'pb-2 text-sm font-medium transition-colors relative flex items-center gap-1 whitespace-nowrap',
-                activeTab === 'submission' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-500 hover:text-slate-700'
+                'pb-2 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1 whitespace-nowrap',
+                activeTab === 'submission' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
-              <CheckCircle size={16} />
+              <CheckCircle size={14} />
               Выполнение
               {task.submission && (
                 <span className={cn(
-                  'text-xs px-1.5 py-0.5 rounded-full ml-1',
+                  'text-[10px] px-1.5 py-0.5 rounded ml-1',
                   task.submission.status === 'approved' ? 'bg-green-100 text-green-700' :
                   task.submission.status === 'rejected' ? 'bg-red-100 text-red-700' :
                   'bg-yellow-100 text-yellow-700'
@@ -739,13 +941,13 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <div className="space-y-4">
               
               {isEditingTask ? (
-                <div className="space-y-4 mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-inner">
+                <div className="space-y-4 mb-6 bg-slate-50 p-4 rounded-md border border-slate-200">
                   <div>
                     <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Описание</label>
                     <textarea 
                       value={editData.description}
                       onChange={e => setEditData({...editData, description: e.target.value})}
-                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-green-700/30"
+                      className="w-full text-sm border border-slate-200 rounded-md px-3 py-2 outline-none focus:border-green-600"
                       rows={4}
                     />
                   </div>
@@ -755,7 +957,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                       <select 
                         value={editData.priority}
                         onChange={e => setEditData({...editData, priority: e.target.value as Priority})}
-                        className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-green-700/30"
+                        className="w-full text-sm border border-slate-200 rounded-md px-3 py-2 outline-none focus:border-green-600"
                       >
                         <option value="critical">Критический</option>
                         <option value="high">Высокий</option>
@@ -769,15 +971,15 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                         type="datetime-local"
                         value={editData.deadline}
                         onChange={e => setEditData({...editData, deadline: e.target.value})}
-                        className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-green-700/30"
+                        className="w-full text-sm border border-slate-200 rounded-md px-3 py-2 outline-none focus:border-green-600"
                       />
                     </div>
                   </div>
                   <div className="flex gap-2 pt-2">
-                    <button onClick={handleSaveEditTask} className="flex items-center gap-1.5 px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 transition-colors">
-                      <Save size={16} /> Сохранить изменения
+                    <button onClick={handleSaveEditTask} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-md text-xs font-bold uppercase tracking-wider hover:bg-green-700">
+                      <Save size={14} /> Сохранить
                     </button>
-                    <button onClick={() => setIsEditingTask(false)} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">
+                    <button onClick={() => setIsEditingTask(false)} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-md text-xs font-bold uppercase tracking-wider hover:bg-slate-50">
                       Отмена
                     </button>
                   </div>
@@ -788,7 +990,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Исполнитель</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Исполнитель</div>
                   
                   {isLeader ? (
                     <div className="space-y-2">
@@ -796,7 +998,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                         disabled={isAssigning}
                         value={task.assigneeId || ''}
                         onChange={(e) => handleClaimOrAssign(e.target.value)} 
-                        className="text-sm border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-green-700/30 outline-none w-full bg-slate-50 hover:bg-white transition-colors"
+                        className="text-sm border border-slate-200 rounded-md px-2 py-1.5 outline-none w-full bg-slate-50 hover:bg-white focus:border-green-600"
                       >
                         <option value="">Не назначен (Свободная)</option>
                         {unitUsers.map(u => (
@@ -805,23 +1007,22 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                           </option>
                         ))}
                       </select>
-                      <p className="text-[10px] text-slate-400 italic">Командир может назначать любого сотрудника группы</p>
                     </div>
                   ) : (
                     <div className="flex flex-col gap-2">
                       {assignee ? (
                         <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-green-700 flex items-center justify-center text-white text-xs font-bold shadow-sm">
+                          <div className="w-8 h-8 rounded bg-green-600 flex items-center justify-center text-white text-xs font-bold">
                             {getAssigneeInitials(assignee)}
                           </div>
                           <div>
-                            <div className="text-sm font-medium text-slate-700">{getAssigneeFullName(assignee)}</div>
-                            <div className="text-[10px] text-slate-400">{assignee.rank}</div>
+                            <div className="text-sm font-bold text-slate-700">{getAssigneeFullName(assignee)}</div>
+                            <div className="text-[10px] text-slate-500 uppercase tracking-wider">{assignee.rank}</div>
                           </div>
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <div className="text-sm text-slate-500 flex items-center gap-2 bg-white p-2 rounded-lg border border-dashed border-slate-300">
+                          <div className="text-sm text-slate-500 flex items-center gap-2 bg-white p-2 rounded-md border border-dashed border-slate-300">
                             <AlertTriangle size={16} className="text-amber-500" />
                             Свободная задача
                           </div>
@@ -829,9 +1030,9 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                              <button 
                                disabled={isAssigning}
                                onClick={() => handleClaimOrAssign(currentUser.id.toString())}
-                               className="w-full text-sm bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-800 transition-all font-medium flex items-center justify-center gap-2 shadow-sm"
+                               className="w-full text-xs uppercase tracking-wider bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 font-bold flex items-center justify-center gap-2"
                              >
-                               <UserPlus size={16} /> Взять в работу
+                               <UserPlus size={14} /> Взять в работу
                              </button>
                           )}
                         </div>
@@ -841,24 +1042,24 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 </div>
 
                 <div>
-                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Постановщик</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Постановщик</div>
                   <div className="flex items-center gap-2">
                     {creator ? (
                       <>
                         <div
-                          className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
-                          style={{ backgroundColor: `hsl(${parseInt(creator.id.toString()) * 100 % 360}, 70%, 50%)` }}
+                          className="w-6 h-6 rounded flex items-center justify-center text-white text-[9px] font-bold"
+                          style={{ backgroundColor: `hsl(${parseInt(creator.id.toString()) * 100 % 360}, 40%, 40%)` }}
                         >
                           {getAssigneeInitials(creator)}
                         </div>
-                        <span className="text-sm text-slate-700">{creator.rank} {getAssigneeFullName(creator)}</span>
+                        <span className="text-sm font-medium text-slate-700">{creator.rank} {getAssigneeFullName(creator)}</span>
                       </>
-                    ) : <span className="text-sm text-slate-500">Система</span>}
+                    ) : <span className="text-sm font-medium text-slate-500">Система</span>}
                   </div>
                 </div>
 
                 <div>
-                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Подразделение</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Подразделение</div>
                   <span className="text-sm text-slate-700 font-medium flex items-center gap-1.5">
                     <Users size={14} className="text-slate-400" />
                     {unit?.name || '—'}
@@ -866,25 +1067,25 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 </div>
 
                 <div>
-                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Дедлайн</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Дедлайн</div>
                   <span className={cn(
-                    "text-sm font-semibold flex items-center gap-1.5",
-                    new Date(task.deadline) < new Date() && task.status !== 'done' ? "text-red-600" : "text-slate-700"
+                    "text-sm font-bold flex items-center gap-1.5",
+                    parsedModalDeadline && parsedModalDeadline < new Date() && task.status !== 'done' ? "text-red-600" : "text-slate-700"
                   )}>
                     <Calendar size={12} />
-                    {new Date(task.deadline).toLocaleString('ru-RU', {
+                    {parsedModalDeadline ? parsedModalDeadline.toLocaleString('ru-RU', {
                       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
-                    })}
+                    }) : 'Без срока'}
                   </span>
                 </div>
               </div>
 
               {task.tags.length > 0 && (
                 <div className="mt-4">
-                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-1">Метки</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Метки</div>
                   <div className="flex flex-wrap gap-1">
                     {task.tags.map(tag => (
-                      <span key={tag} className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">{tag}</span>
+                      <span key={tag} className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded">{tag}</span>
                     ))}
                   </div>
                 </div>
@@ -892,19 +1093,17 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
               {task.subtasks && task.subtasks.length > 0 && (
                 <div className="mt-4">
-                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Подзадачи</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Подзадачи</div>
                   <div className="space-y-1.5">
                     {task.subtasks.map(st => (
                       <label key={st.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={st.done}
-                          onChange={async () => {
-                            // Логика подзадач
-                          }}
-                          className="rounded border-slate-300 text-green-700 focus:ring-green-700"
+                          onChange={async () => {}}
+                          className="rounded border-slate-300 text-green-600 focus:ring-green-600"
                         />
-                        <span className={cn('text-sm', st.done ? 'line-through text-slate-400' : 'text-slate-700')}>{st.title}</span>
+                        <span className={cn('text-sm font-medium', st.done ? 'line-through text-slate-400' : 'text-slate-700')}>{st.title}</span>
                       </label>
                     ))}
                   </div>
@@ -913,7 +1112,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
               {allowedStatuses.length > 0 && (
                 <div className="mt-6 border-t border-slate-100 pt-4">
-                  <div className="text-[10px] font-medium text-slate-400 uppercase mb-2">Изменить статус вручную</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Изменить статус вручную</div>
                   <div className="flex flex-wrap gap-1.5">
                     {allowedStatuses.map(col => (
                       <button
@@ -922,9 +1121,9 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                           await api.moveTask(parseInt(task.id), col.id, 0);
                         }}
                         className={cn(
-                          'text-xs px-2.5 py-1 rounded-lg border transition-colors',
-                          task.status === col.id
-                            ? 'border-green-700 bg-green-50 text-green-700 font-medium'
+                          'text-xs uppercase tracking-wider font-bold px-3 py-1.5 rounded-md border',
+                          (task.status === col.id || (task.status === 'planned' && col.id === 'todo'))
+                            ? 'border-green-600 bg-green-50 text-green-800'
                             : 'border-slate-200 text-slate-500 hover:bg-slate-50'
                         )}
                       >
@@ -947,7 +1146,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
           {activeTab === 'attachments' && (
             <div className="space-y-4">
-              <h3 className="text-sm font-medium text-slate-700">Вложения задачи</h3>
+              <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Вложения задачи</h3>
               {renderFileList(task.attachments || [])}
             </div>
           )}
@@ -959,23 +1158,49 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
           )}
         </div>
 
-        <div className="p-6 pt-4 border-t border-slate-100">
-          <div className="flex items-center justify-between">
-            <div className="text-[10px] text-slate-400">
+        <div className="p-6 pt-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
               Создано: {new Date(task.createdAt).toLocaleDateString('ru-RU')}
             </div>
+
+            {(isLeader || isCreator) && (
+              <>
+                <div className="w-px h-4 bg-slate-300"></div>
+                {task.is_archived ? (
+                  <button 
+                    onClick={() => onToggleArchive(task.id, false)}
+                    className="text-[10px] font-bold uppercase tracking-wider text-green-600 hover:text-green-800 flex items-center gap-1 transition-colors"
+                  >
+                    <RefreshCw size={12} /> Вернуть из архива
+                  </button>
+                ) : (
+                  task.status === 'done' && (
+                    <button 
+                      onClick={() => onToggleArchive(task.id, true)}
+                      className="text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 flex items-center gap-1 transition-colors"
+                    >
+                      <Archive size={12} /> Убрать в архив
+                    </button>
+                  )
+                )}
+              </>
+            )}
+          </div>
+
+          <div>
             {showConfirmDelete ? (
               <div className="flex items-center gap-2">
-                <span className="text-xs text-red-600">Удалить задачу?</span>
+                <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Удалить задачу?</span>
                 <button
                   onClick={() => onDelete(task.id)}
-                  className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                  className="text-xs font-bold uppercase tracking-wider px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
                 >
                   Да
                 </button>
                 <button
                   onClick={() => setShowConfirmDelete(false)}
-                  className="text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50 transition-colors"
+                  className="text-xs font-bold uppercase tracking-wider px-3 py-1 border border-slate-200 rounded hover:bg-slate-50 bg-white"
                 >
                   Нет
                 </button>
@@ -984,7 +1209,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               isLeader && (
                 <button
                   onClick={() => setShowConfirmDelete(true)}
-                  className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 transition-colors"
+                  className="text-[10px] font-bold uppercase tracking-wider text-red-400 hover:text-red-600 flex items-center gap-1 transition-colors"
                 >
                   <Trash2 size={12} /> Удалить
                 </button>
@@ -997,7 +1222,6 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
   );
 }
 
-// ========== TaskComments Component ==========
 function TaskComments({ taskId, comments, currentUser }: {
   taskId: string;
   comments: any[];
@@ -1031,7 +1255,6 @@ function TaskComments({ taskId, comments, currentUser }: {
       setAttachments([]);
       setShowAttachmentMenu(false);
     } catch (error) {
-      console.error('Ошибка отправки комментария:', error);
       alert('Не удалось отправить комментарий');
     } finally {
       setIsSending(false);
@@ -1100,20 +1323,14 @@ function TaskComments({ taskId, comments, currentUser }: {
           const fileUrl = att.url || att.fileUrl || att.file || '';
           const fileName = att.name || att.filename || 'Файл';
           return (
-            <div key={att.id} className="flex items-center gap-1 bg-slate-50 rounded-lg px-2 py-1 border border-slate-200">
+            <div key={att.id} className="flex items-center gap-1 bg-slate-50 rounded-md px-2 py-1 border border-slate-200">
               {fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
                 <Image size={12} className="text-slate-400" />
               ) : (
                 <FileText size={12} className="text-slate-400" />
               )}
               <span className="text-xs text-slate-600 max-w-[100px] truncate">{fileName}</span>
-              <a
-                href={fileUrl}
-                download={fileName}
-                className="ml-1 p-0.5 hover:bg-slate-200 rounded"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              <a href={fileUrl} download={fileName} className="ml-1 p-0.5 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
                 <Download size={10} className="text-slate-500" />
               </a>
             </div>
@@ -1137,17 +1354,17 @@ function TaskComments({ taskId, comments, currentUser }: {
             <div key={comment.id} className="group relative">
               <div className="flex gap-3">
                 <div className="flex-shrink-0">
-                  <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
+                  <div className="w-8 h-8 rounded bg-slate-200 flex items-center justify-center text-slate-700 font-bold text-xs">
                     {initials}
                   </div>
                 </div>
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-medium text-slate-800">
+                    <span className="text-sm font-bold text-slate-800">
                       {rank} {fullName}
                     </span>
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                       {formatDate(date)}
                     </span>
                   </div>
@@ -1157,23 +1374,13 @@ function TaskComments({ taskId, comments, currentUser }: {
                       <textarea
                         value={editText}
                         onChange={(e) => setEditText(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-600"
                         rows={2}
                         autoFocus
                       />
                       <div className="flex gap-2">
-                        <button
-                          onClick={saveEdit}
-                          className="text-xs px-2 py-1 bg-green-700 text-white rounded hover:bg-green-800"
-                        >
-                          Сохранить
-                        </button>
-                        <button
-                          onClick={cancelEdit}
-                          className="text-xs px-2 py-1 border border-slate-200 rounded hover:bg-slate-50"
-                        >
-                          Отмена
-                        </button>
+                        <button onClick={saveEdit} className="text-xs font-bold uppercase tracking-wider px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700">Сохранить</button>
+                        <button onClick={cancelEdit} className="text-xs font-bold uppercase tracking-wider px-3 py-1.5 border border-slate-200 rounded hover:bg-slate-50">Отмена</button>
                       </div>
                     </div>
                   ) : (
@@ -1185,19 +1392,11 @@ function TaskComments({ taskId, comments, currentUser }: {
                 </div>
 
                 {authorId === currentUser?.id?.toString() && !editingCommentId && (
-                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                    <button
-                      onClick={() => startEditing(comment)}
-                      className="p-1 text-slate-400 hover:text-blue-600 rounded"
-                      title="Редактировать"
-                    >
+                  <div className="opacity-0 group-hover:opacity-100 flex gap-1">
+                    <button onClick={() => startEditing(comment)} className="p-1 text-slate-400 hover:text-green-600 rounded">
                       <Edit2 size={12} />
                     </button>
-                    <button
-                      onClick={() => handleDelete(comment.id)}
-                      className="p-1 text-slate-400 hover:text-red-600 rounded"
-                      title="Удалить"
-                    >
+                    <button onClick={() => handleDelete(comment.id)} className="p-1 text-slate-400 hover:text-red-600 rounded">
                       <Trash2 size={12} />
                     </button>
                   </div>
@@ -1211,24 +1410,17 @@ function TaskComments({ taskId, comments, currentUser }: {
 
       <div className="relative">
         {attachments.length > 0 && (
-          <div className="mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
-            <div className="text-xs font-medium text-slate-600 mb-2 flex items-center gap-2">
+          <div className="mb-3 p-3 bg-slate-50 rounded-md border border-slate-200">
+            <div className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-2">
               <Paperclip size={12} />
               Прикреплённые файлы:
             </div>
             <div className="flex flex-wrap gap-2">
               {attachments.map((file, index) => (
-                <div key={index} className="flex items-center gap-1 bg-white rounded-lg px-2 py-1 border border-slate-200 shadow-sm">
-                  {file.type.startsWith('image/') ? (
-                    <Image size={12} className="text-slate-400" />
-                  ) : (
-                    <FileText size={12} className="text-slate-400" />
-                  )}
+                <div key={index} className="flex items-center gap-1 bg-white rounded-md px-2 py-1 border border-slate-200">
+                  {file.type.startsWith('image/') ? <Image size={12} className="text-slate-400" /> : <FileText size={12} className="text-slate-400" />}
                   <span className="text-xs text-slate-600 max-w-[150px] truncate">{file.name}</span>
-                  <button
-                    onClick={() => removeAttachment(index)}
-                    className="ml-1 p-0.5 hover:bg-slate-100 rounded"
-                  >
+                  <button onClick={() => removeAttachment(index)} className="ml-1 p-0.5 hover:bg-slate-100 rounded">
                     <X size={10} className="text-slate-500" />
                   </button>
                 </div>
@@ -1243,75 +1435,44 @@ function TaskComments({ taskId, comments, currentUser }: {
             onChange={(e) => setNewComment(e.target.value)}
             onKeyDown={handleKeyPress}
             placeholder="Напишите комментарий..."
-            className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30 resize-none min-h-[80px]"
+            className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-600 resize-none min-h-[80px]"
           />
 
           <div className="flex flex-col gap-1">
             <div className="relative">
-              <button
-                onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
-                className="p-2 text-slate-400 hover:text-green-700 hover:bg-slate-50 rounded-lg transition-colors"
-                title="Прикрепить файл"
-              >
+              <button onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="p-2 text-slate-400 hover:text-green-600 hover:bg-slate-50 rounded-md">
                 <Paperclip size={18} />
               </button>
 
               {showAttachmentMenu && (
-                <div className="absolute bottom-full right-0 mb-1 bg-white rounded-lg shadow-lg border border-slate-200 py-1 min-w-[150px] z-10">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full px-3 py-2 text-sm text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                  >
-                    <FileText size={14} />
-                    Документ
+                <div className="absolute bottom-full right-0 mb-1 bg-white rounded-md shadow-lg border border-slate-200 py-1 min-w-[150px] z-10">
+                  <button onClick={() => fileInputRef.current?.click()} className="w-full px-3 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                    <FileText size={14} /> Документ
                   </button>
-                  <button
-                    onClick={() => {
-                      if (fileInputRef.current) {
-                        fileInputRef.current.accept = 'image/*';
-                        fileInputRef.current.click();
-                      }
-                    }}
-                    className="w-full px-3 py-2 text-sm text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                  >
-                    <Image size={14} />
-                    Изображение
+                  <button onClick={() => { if (fileInputRef.current) { fileInputRef.current.accept = 'image/*'; fileInputRef.current.click(); } }} className="w-full px-3 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                    <Image size={14} /> Изображение
                   </button>
                 </div>
               )}
             </div>
 
-            <button
-              onClick={handleSendComment}
-              disabled={isSending || (!newComment.trim() && attachments.length === 0)}
-              className="p-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Отправить"
-            >
+            <button onClick={handleSendComment} disabled={isSending || (!newComment.trim() && attachments.length === 0)} className="p-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50">
               <Send size={18} />
             </button>
           </div>
         </div>
 
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFileSelect}
-          className="hidden"
-          multiple
-        />
+        <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" multiple />
       </div>
 
-      <div className="text-[10px] text-slate-400">
+      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
         Enter для отправки • Shift+Enter для новой строки
       </div>
     </div>
   );
 }
 
-// ========== TaskSubmission Component ==========
-function TaskSubmission({ task }: {
-  task: Task;
-}) {
+function TaskSubmission({ task }: { task: Task }) {
   const { user } = useAuth();
   const [files, setFiles] = useState<File[]>([]);
   const [comment, setComment] = useState('');
@@ -1347,7 +1508,6 @@ function TaskSubmission({ task }: {
       setFiles([]);
       setComment('');
     } catch (error) {
-      console.error('Failed to submit task:', error);
       alert('Ошибка при отправке отчета');
     } finally {
       setSubmitting(false);
@@ -1359,7 +1519,6 @@ function TaskSubmission({ task }: {
     try {
       await api.updateTask(parseInt(task.id), { status: 'in_progress' });
     } catch (error) {
-      console.error(error);
       alert('Не удалось отозвать задание.');
     } finally {
       setSubmitting(false);
@@ -1392,35 +1551,35 @@ function TaskSubmission({ task }: {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-        <CheckCircle size={18} className="text-green-700" />
-        <h3 className="font-bold text-slate-800">Результаты работы</h3>
+        <CheckCircle size={18} className="text-slate-600" />
+        <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800">Результаты работы</h3>
       </div>
 
       {task.submission && (
         <div className={cn(
-          'p-4 rounded-2xl border-l-4',
+          'p-4 rounded-md border-l-4',
           task.submission.status === 'approved' ? 'bg-green-50 border-green-500' :
           task.submission.status === 'rejected' ? 'bg-red-50 border-red-500' :
           'bg-amber-50 border-amber-500'
         )}>
           <div className="flex items-center justify-between mb-3">
              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий статус отчета</span>
-             <span className="text-xs font-medium px-2 py-1 rounded-full bg-white border border-slate-100 shadow-sm">
+             <span className="text-xs font-bold uppercase tracking-wider px-2 py-1 rounded bg-white border border-slate-200 shadow-sm">
                {task.submission.status === 'approved' ? '✅ Принят' :
                 task.submission.status === 'rejected' ? '❌ Возвращен' : '⏳ Ожидает проверки'}
              </span>
           </div>
 
-          <p className="text-sm text-slate-700 bg-white/50 p-3 rounded-xl mb-3 border border-white/50">
+          <p className="text-sm font-medium text-slate-700 bg-white/70 p-3 rounded-md mb-3 border border-white">
             {task.submission.comment || 'Без комментария'}
           </p>
 
           {task.submission.files && task.submission.files.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {task.submission.files.map((f: any) => (
-                <a key={f.id} href={f.file || f.fileUrl} target="_blank" className="flex items-center gap-2 p-2 bg-white rounded-lg border border-slate-100 hover:border-blue-300 transition-all">
-                  <FileText size={14} className="text-blue-500" />
-                  <span className="text-xs truncate flex-1">{f.filename || f.fileName || 'Документ'}</span>
+                <a key={f.id} href={f.file || f.fileUrl} target="_blank" className="flex items-center gap-2 p-2 bg-white rounded-md border border-slate-200 hover:border-slate-400">
+                  <FileText size={14} className="text-slate-500" />
+                  <span className="text-xs font-bold uppercase tracking-wider truncate flex-1">{f.filename || f.fileName || 'Документ'}</span>
                   <Download size={12} className="text-slate-400" />
                 </a>
               ))}
@@ -1428,20 +1587,16 @@ function TaskSubmission({ task }: {
           )}
 
           {task.submission.reviewComment && (
-            <div className="mt-3 p-3 bg-white border border-slate-100 rounded-lg text-sm shadow-sm">
-              <span className="font-semibold text-slate-700 block mb-1">Вердикт проверяющего:</span>
-              <p className="text-slate-600">{task.submission.reviewComment}</p>
+            <div className="mt-3 p-3 bg-white border border-slate-200 rounded-md text-sm shadow-sm">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-700 block mb-1">Вердикт проверяющего:</span>
+              <p className="text-slate-600 font-medium">{task.submission.reviewComment}</p>
             </div>
           )}
           
           {isAssignee && task.status === 'review' && (
              <div className="mt-4 pt-4 border-t border-amber-200">
-               <button
-                 onClick={handleWithdraw}
-                 disabled={submitting}
-                 className="w-full py-2 bg-white border border-amber-300 text-amber-700 rounded-xl hover:bg-amber-100 transition-all font-medium flex items-center justify-center gap-2"
-               >
-                 <RefreshCw size={16} /> Отозвать с проверки для редактирования
+               <button onClick={handleWithdraw} disabled={submitting} className="w-full py-2 bg-white border border-amber-300 text-amber-700 rounded-md hover:bg-amber-100 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2">
+                 <RefreshCw size={14} /> Отозвать с проверки
                </button>
              </div>
           )}
@@ -1449,11 +1604,11 @@ function TaskSubmission({ task }: {
       )}
 
       {canSubmit && (
-        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 shadow-inner">
-          <label className="block text-xs font-bold text-slate-500 uppercase mb-3">Прикрепить отчетные документы</label>
+        <div className="bg-slate-50 p-5 rounded-md border border-slate-200">
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Прикрепить документы</label>
           <div className="flex gap-2 mb-4">
-             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition-all text-sm font-medium">
-               <Upload size={16} /> Выбрать файлы
+             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-md hover:bg-slate-100 text-xs font-bold uppercase tracking-wider">
+               <Upload size={14} /> Выбрать файлы
              </button>
              <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" multiple />
           </div>
@@ -1461,7 +1616,7 @@ function TaskSubmission({ task }: {
           {files.length > 0 && (
             <div className="mb-4 space-y-1">
               {files.map((f, i) => (
-                <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg text-xs border border-slate-100">
+                <div key={i} className="flex items-center justify-between p-2 bg-white rounded-md text-xs font-bold uppercase tracking-wider border border-slate-200">
                   <span className="truncate pr-4">{f.name}</span>
                   <button onClick={() => removeFile(i)} className="text-red-500 hover:bg-red-50 p-1 rounded"><X size={14} /></button>
                 </div>
@@ -1473,43 +1628,30 @@ function TaskSubmission({ task }: {
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             placeholder="Напишите краткий комментарий к выполненной работе..."
-            className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-4 focus:ring-green-700/10 focus:border-green-700 outline-none transition-all h-24 mb-4"
+            className="w-full p-3 text-sm border border-slate-200 rounded-md focus:border-green-500 outline-none h-24 mb-4"
           />
 
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || (files.length === 0 && !comment.trim())}
-            className="w-full py-3 bg-green-700 text-white rounded-xl hover:bg-green-800 disabled:opacity-50 font-bold flex items-center justify-center gap-2 shadow-lg shadow-green-700/20 transition-all"
-          >
-            {submitting ? 'Отправка...' : <><Send size={18} /> Сдать задание</>}
+          <button onClick={handleSubmit} disabled={submitting || (files.length === 0 && !comment.trim())} className="w-full py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2">
+            {submitting ? 'Отправка...' : <><Send size={14} /> Сдать задание</>}
           </button>
         </div>
       )}
 
       {canReview && (
-        <div className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
-          <label className="block text-xs font-bold text-blue-600 uppercase mb-3 text-center">Проверка выполнения</label>
+        <div className="bg-slate-50 p-5 rounded-md border border-slate-200">
+          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 text-center">Проверка выполнения</label>
           <textarea
             value={reviewComment}
             onChange={(e) => setReviewComment(e.target.value)}
             placeholder="Ваш вердикт или замечания для доработки..."
-            className="w-full p-3 text-sm border border-blue-200 rounded-xl focus:ring-4 focus:ring-blue-700/10 focus:border-blue-700 outline-none transition-all h-24 mb-4"
+            className="w-full p-3 text-sm border border-slate-300 rounded-md focus:border-green-600 outline-none h-24 mb-4"
           />
           <div className="flex gap-3">
-            <button
-              onClick={() => handleReviewAction(true)}
-              disabled={submitting}
-              className="flex-1 py-3 bg-green-700 text-white rounded-xl hover:bg-green-800 transition-all font-bold flex items-center justify-center gap-2"
-            >
-              <CheckCircle size={18} /> Принять
+            <button onClick={() => handleReviewAction(true)} disabled={submitting} className="flex-1 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2">
+              <CheckCircle size={14} /> Принять
             </button>
-            <button
-              onClick={() => handleReviewAction(false)}
-              disabled={submitting || !reviewComment.trim()}
-              className="flex-1 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-all font-bold flex items-center justify-center gap-2 disabled:opacity-50"
-              title="Для возврата на доработку нужен комментарий"
-            >
-              <X size={18} /> Доработка
+            <button onClick={() => handleReviewAction(false)} disabled={submitting || !reviewComment.trim()} className="flex-1 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-50" title="Для возврата нужен комментарий">
+              <X size={14} /> Доработка
             </button>
           </div>
         </div>
@@ -1518,7 +1660,6 @@ function TaskSubmission({ task }: {
   );
 }
 
-// ========== AddTaskModal Component ==========
 function AddTaskModal({ onClose, onAdd, users, units }: {
   onClose: () => void;
   onAdd: (task: Omit<Task, 'id' | 'createdAt'>, files: File[]) => Promise<void>;
@@ -1602,10 +1743,10 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-md w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <form onSubmit={handleSubmit} className="p-6">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-lg font-bold text-slate-800">Новая задача</h2>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800">Новая задача</h2>
             <button type="button" onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600">
               <X size={20} />
             </button>
@@ -1613,31 +1754,31 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
 
           <div className="space-y-4">
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Название *</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Название *</label>
               <input
                 type="text"
                 value={title}
                 onChange={e => setTitle(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30 focus:border-green-700"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
                 placeholder="Введите название задачи"
                 required
               />
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Описание</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Описание</label>
               <textarea
                 value={description}
                 onChange={e => setDescription(e.target.value)}
                 rows={3}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30 focus:border-green-700 resize-none"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500 resize-none"
                 placeholder="Описание задачи"
               />
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Приоритет</label>
-              <select value={priority} onChange={e => setPriority(e.target.value as Priority)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Приоритет</label>
+              <select value={priority} onChange={e => setPriority(e.target.value as Priority)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500">
                 <option value="critical">Критический</option>
                 <option value="high">Высокий</option>
                 <option value="medium">Средний</option>
@@ -1646,11 +1787,11 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Подразделение *</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Подразделение *</label>
               <select
                 value={selectedUnitId}
                 onChange={e => handleUnitChange(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
                 required
               >
                 <option value="">Выберите подразделение</option>
@@ -1661,11 +1802,11 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Исполнитель (необязательно)</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Исполнитель (необязательно)</label>
               <select
                 value={selectedUserId}
                 onChange={e => handleUserChange(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
                 disabled={!selectedUnitId}
               >
                 <option value="">Не назначен (задача на подразделение)</option>
@@ -1678,40 +1819,25 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Вложения (файлы любых форматов)</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Вложения</label>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => document.getElementById('task-attachments')?.click()}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 rounded-md hover:bg-slate-50"
                 >
-                  <Upload size={14} />
-                  Выбрать файлы
+                  <Upload size={14} /> Выбрать файлы
                 </button>
-                <input
-                  id="task-attachments"
-                  type="file"
-                  onChange={handleAttachmentSelect}
-                  className="hidden"
-                  multiple
-                />
+                <input id="task-attachments" type="file" onChange={handleAttachmentSelect} className="hidden" multiple />
               </div>
               {attachmentFiles.length > 0 && (
                 <div className="mt-2 space-y-2">
                   {attachmentFiles.map((file, index) => (
-                    <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
-                      {file.type?.startsWith('image/') ? (
-                        <Image size={16} className="text-slate-400" />
-                      ) : (
-                        <FileText size={16} className="text-slate-400" />
-                      )}
+                    <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-md">
+                      {file.type?.startsWith('image/') ? <Image size={16} className="text-slate-400" /> : <FileText size={16} className="text-slate-400" />}
                       <span className="text-sm text-slate-600 flex-1 truncate">{file.name}</span>
                       <span className="text-xs text-slate-400">{formatFileSize(file.size)}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeAttachmentFile(index)}
-                        className="p-1 hover:bg-slate-200 rounded"
-                      >
+                      <button type="button" onClick={() => removeAttachmentFile(index)} className="p-1 hover:bg-slate-200 rounded">
                         <X size={14} className="text-slate-500" />
                       </button>
                     </div>
@@ -1721,36 +1847,32 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Дедлайн (дата и время)</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Дедлайн</label>
               <input
                 type="datetime-local"
                 value={deadline}
                 onChange={e => setDeadline(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30 focus:border-green-700"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
               />
             </div>
 
             <div>
-              <label className="text-xs font-medium text-slate-600 mb-1 block">Метки (через запятую)</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Метки (через запятую)</label>
               <input
                 type="text"
                 value={tagsInput}
                 onChange={e => setTagsInput(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30 focus:border-green-700"
-                placeholder="план, отчет, проверка"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
+                placeholder="план, отчет"
               />
             </div>
           </div>
 
           <div className="flex justify-end gap-2 mt-6">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 rounded-md hover:bg-slate-50">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="px-4 py-2 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 flex items-center gap-2"
-            >
+            <button type="submit" disabled={submitting} className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
               {submitting ? 'Создание...' : 'Создать'}
             </button>
           </div>

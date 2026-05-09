@@ -16,7 +16,6 @@ import type { Task, Notification, OrgUnit, TaskFile } from '@/types';
 import { cn } from '@/utils/cn';
 import { Profile } from '@/components/Profile';
 import { TaskManagement } from '@/components/TaskManagement';
-// Импортируем компонент Базы знаний
 import { KnowledgeBase } from '@/components/KnowledgeBase'; 
 
 function App() {
@@ -36,17 +35,13 @@ function App() {
 
   const loadData = async () => {
     try {
-      const [tasksData, notifsData, unitsData, unreadData] = await Promise.all([
+      const [tasksData, notifsData, unitsData, unreadData]: any[] = await Promise.all([
         api.getTasks(),
         api.getNotifications(),
         api.getOrgTree(),
         api.getUnreadCount(),
       ]);
 
-      console.log('Tasks data:', tasksData);
-      console.log('Units tree data:', unitsData);
-
-      // Обработка пагинированных ответов
       const tasksList = Array.isArray(tasksData) ? tasksData : (tasksData.results || []);
       const notifsList = Array.isArray(notifsData) ? notifsData : (notifsData.results || []);
       const unitsList = Array.isArray(unitsData) ? unitsData : (unitsData.results || []);
@@ -62,17 +57,22 @@ function App() {
 
   const transformTasks = (apiTasks: any[]): Task[] => {
     return apiTasks.map(t => ({
-      id: t.id.toString(),
-      title: t.title,
+      ...t, // Пробрасываем все исходные поля для безопасности
+      id: t.id?.toString(),
+      title: t.title || 'Без названия',
       description: t.description || '',
-      status: t.status,
-      priority: t.priority,
+      status: (t.status || 'todo').toLowerCase(),
+      priority: (t.priority || 'medium').toLowerCase(),
       assigneeId: t.assigned_to?.toString() || '',
       creatorId: t.created_by?.toString() || '',
       unitId: t.org_unit?.toString() || '',
       deadline: t.deadline || '',
-      createdAt: t.created_at,
-      tags: t.tags || [],
+      start_date: t.start_date || '',
+      end_date: t.end_date || '',
+      createdAt: t.created_at || new Date().toISOString(),
+      is_archived: t.is_archived === true || String(t.is_archived).toLowerCase() === 'true',
+      is_milestone: t.is_milestone === true || String(t.is_milestone).toLowerCase() === 'true',
+      tags: Array.isArray(t.tags) ? t.tags : [],
       subtasks: (t.subtasks || []).map((st: any) => ({
         id: st.id.toString(),
         title: st.title,
@@ -187,7 +187,6 @@ function App() {
                 onNotificationsChange={setNotifications} 
               />
             } />
-            {/* Маршрут для Базы знаний */}
             <Route path="/knowledge" element={<KnowledgeBase />} />
             
             <Route path="/logs" element={<AuditLogs />} />
