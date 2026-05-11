@@ -17,6 +17,7 @@ import { cn } from '@/utils/cn';
 import { Profile } from '@/components/Profile';
 import { TaskManagement } from '@/components/TaskManagement';
 import { KnowledgeBase } from '@/components/KnowledgeBase'; 
+import { Reminders } from '@/components/Reminders';
 
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -200,9 +201,17 @@ function App() {
                 searchQuery={searchQuery} 
               />
             } />
+            {/* НОВЫЙ МАРШРУТ ДЛЯ НАПОМИНАНИЙ */}
+            <Route path="/reminders" element={
+              <Reminders 
+                tasks={tasks} 
+                onTasksChange={setTasks} 
+              />
+            } />
             <Route path="/kanban" element={<Navigate to="/tasks" replace />} />
             <Route path="/statistics" element={<Navigate to="/tasks" replace />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            
           </Routes>
         </main>
       </div>

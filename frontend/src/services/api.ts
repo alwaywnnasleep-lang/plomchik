@@ -80,7 +80,23 @@ class ApiService {
         throw new Error(errorData.detail || errorData.message || JSON.stringify(errorData) || `API Error: ${response.status}`);
       }
 
-      return response.json();
+      // ==== ИСПРАВЛЕНИЕ ЗДЕСЬ ====
+      // 1. Если статус 204 No Content, сразу возвращаем null
+      if (response.status === 204) {
+        return null;
+      }
+
+      // 2. Читаем ответ как текст
+      const text = await response.text();
+      
+      // 3. Если текст пустой, возвращаем null, чтобы не сломать JSON.parse
+      if (!text) {
+        return null;
+      }
+
+      // 4. Только если текст есть, парсим его
+      return JSON.parse(text);
+
     } catch (error) {
       console.error('API Request failed:', error);
       throw error;
@@ -132,7 +148,6 @@ class ApiService {
     let allUsers: any[] = [];
     let hasNext = true;
 
-    // ЗАЩИТА: Собираем максимум 10 страниц, чтобы браузер не зависал
     while (hasNext && page <= 10) {
       try {
         const response: any = await this.request(`/users/?page=${page}`);
@@ -183,7 +198,6 @@ class ApiService {
     
     const baseQuery = params ? new URLSearchParams(params).toString() : '';
 
-    // ЗАЩИТА: Максимум 10 страниц
     while (hasNext && page <= 10) {
       const query = baseQuery ? `?${baseQuery}&page=${page}` : `?page=${page}`;
       try {
@@ -252,9 +266,11 @@ class ApiService {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${this.getToken()}` },
       body: formData,
-    }).then(res => {
+    }).then(async (res) => {
       if (!res.ok) return res.text().then(text => { throw new Error(text); });
-      return res.json();
+      const text = await res.text();
+      if (!text) return null;
+      return JSON.parse(text);
     });
   }
 
@@ -307,9 +323,11 @@ class ApiService {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${this.getToken()}` },
       body: formData
-    }).then(res => {
+    }).then(async (res) => {
       if (!res.ok) throw new Error('Не удалось загрузить файл комментария');
-      return res.json();
+      const text = await res.text();
+      if (!text) return null;
+      return JSON.parse(text);
     });
   }
 
@@ -470,7 +488,9 @@ class ApiService {
         const errorText = await res.text();
         throw new Error(errorText || 'Upload failed');
       }
-      return res.json();
+      const text = await res.text();
+      if (!text) return null;
+      return JSON.parse(text);
     });
   }
 }

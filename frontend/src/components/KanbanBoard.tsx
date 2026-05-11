@@ -9,6 +9,7 @@ import { cn } from '@/utils/cn';
 import api from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { parseSafeDate } from './AutoPlan';
+import { useSearchParams } from 'react-router-dom';
 
 const columns: { id: TaskStatus; label: string; color: string; bg: string }[] = [
   { id: 'todo', label: 'К выполнению', color: 'border-blue-400', bg: 'bg-blue-50' },
@@ -62,11 +63,12 @@ const normalizeTask = (backendTask: any): Task => {
 
 export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   const { user } = useAuth();
-  
+  const [searchParams, setSearchParams] = useSearchParams();
   const [draggedTask, setDraggedTask] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showArchive, setShowArchive] = useState(false);
+  const [archiveSort, setArchiveSort] = useState<string>('date_desc');
   
   const [users, setUsers] = useState<UserType[]>([]);
   const [units, setUnits] = useState<any[]>([]);
@@ -283,15 +285,43 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   };
 
   if (showArchive) {
-    const archivedTasks = filteredTasks.filter((t: Task) => t.is_archived);
+    let archiveList = tasks.filter((t: Task) => t.is_archived);
+
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      archiveList = archiveList.filter((t: Task) =>
+        t.title.toLowerCase().includes(q) ||
+        (t.description && t.description.toLowerCase().includes(q)) ||
+        (t.tags && t.tags.some(tag => String(tag).toLowerCase().includes(q)))
+      );
+    }
+
+    archiveList.sort((a: Task, b: Task) => {
+      if (archiveSort === 'date_desc') {
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      } else if (archiveSort === 'date_asc') {
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      } else if (archiveSort === 'deadline_asc') {
+        const d1 = parseSafeDate(a.deadline)?.getTime() || Infinity;
+        const d2 = parseSafeDate(b.deadline)?.getTime() || Infinity;
+        return d1 - d2;
+      } else if (archiveSort === 'deadline_desc') {
+        const d1 = parseSafeDate(a.deadline)?.getTime() || 0;
+        const d2 = parseSafeDate(b.deadline)?.getTime() || 0;
+        return d2 - d1;
+      } else if (archiveSort === 'title_asc') {
+        return a.title.localeCompare(b.title);
+      }
+      return 0;
+    });
 
     return (
       <div className="space-y-4 relative bg-white border border-slate-200 rounded-md shadow-sm p-6 min-h-[600px]">
-        <div className="flex items-center justify-between border-b border-slate-200 pb-4 mb-4">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-4 mb-4 flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setShowArchive(false)}
-              className="p-1.5 border border-slate-200 text-slate-500 rounded hover:bg-slate-50 transition-colors"
+              className="p-1.5 border border-slate-200 text-slate-500 rounded hover:bg-slate-50"
               title="Вернуться к доске"
             >
               <ArrowLeft size={16} />
@@ -301,36 +331,55 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
               Архив задач
             </h2>
           </div>
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            В архиве: {archivedTasks.length}
-          </span>
+          
+          <div className="flex items-center gap-3">
+            <select
+              value={archiveSort}
+              onChange={e => setArchiveSort(e.target.value)}
+              className="text-xs font-bold uppercase tracking-wider border border-slate-200 rounded px-3 py-2 bg-slate-50 text-slate-600 focus:outline-none focus:border-green-600 cursor-pointer"
+            >
+              <option value="date_desc">По созданию (Новые)</option>
+              <option value="date_asc">По созданию (Старые)</option>
+              <option value="deadline_asc">По срокам (Ближайшие)</option>
+              <option value="deadline_desc">По срокам (Поздние)</option>
+              <option value="title_asc">По алфавиту (А-Я)</option>
+            </select>
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Всего: {archiveList.length}
+            </span>
+          </div>
         </div>
 
-        {archivedTasks.length > 0 ? (
+        {archiveList.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">ID</th>
                   <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Задача</th>
+                  <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Сроки</th>
                   <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Подразделение</th>
                   <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Создана</th>
                   <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500 text-right">Действия</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {archivedTasks.map((task: Task) => {
+                {archiveList.map((task: Task) => {
                   const unit = units.find((u: any) => String(u.id) === String(task.unitId));
+                  const parsedDeadline = parseSafeDate(task.deadline);
                   return (
-                    <tr key={task.id} className="hover:bg-slate-50 transition-colors">
+                    <tr key={task.id} className="hover:bg-slate-50">
                       <td className="py-3 px-4 text-xs text-slate-400 font-mono">#{task.id}</td>
                       <td className="py-3 px-4">
                         <button 
                           onClick={() => setSelectedTask(task)}
-                          className="font-bold text-slate-700 hover:text-green-600 text-left transition-colors"
+                          className="font-bold text-slate-700 hover:text-green-600 text-left"
                         >
                           {task.title}
                         </button>
+                      </td>
+                      <td className="py-3 px-4 text-xs font-medium text-slate-600">
+                        {parsedDeadline ? parsedDeadline.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
                       </td>
                       <td className="py-3 px-4 text-xs font-medium text-slate-600">{unit?.name || '—'}</td>
                       <td className="py-3 px-4 text-xs font-medium text-slate-600">
@@ -339,7 +388,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                       <td className="py-3 px-4 text-right">
                         <button 
                           onClick={() => handleToggleArchive(task.id, false)}
-                          className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 border border-slate-300 text-slate-600 rounded hover:bg-slate-100 transition-colors"
+                          className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 border border-slate-300 text-slate-600 rounded hover:bg-slate-100"
                         >
                           Вернуть
                         </button>
@@ -354,7 +403,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Archive size={48} className="text-slate-300 mb-4" />
             <h3 className="text-sm font-bold uppercase tracking-wider text-slate-600">Архив пуст</h3>
-            <p className="text-xs font-medium text-slate-400 mt-2">Здесь будут отображаться завершенные задачи, которые вы убрали с доски.</p>
+            <p className="text-xs font-medium text-slate-400 mt-2">Не найдено задач, соответствующих фильтрам.</p>
           </div>
         )}
 
@@ -395,7 +444,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
         <div className="flex items-center gap-2">
           <button 
             onClick={() => setShowArchive(true)}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-md transition-colors shadow-sm"
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-md shadow-sm"
           >
             <Archive size={14} />
             Архив
@@ -405,7 +454,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
             <button 
               onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)} 
               className={cn(
-                "flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border rounded-md transition-colors shadow-sm",
+                "flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border rounded-md shadow-sm",
                 activeFiltersCount > 0 
                   ? "bg-green-50 border-green-200 text-green-700" 
                   : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -479,7 +528,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
 
           <button 
             onClick={() => setShowAddModal(true)} 
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors shadow-sm"
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider bg-green-600 text-white rounded-md hover:bg-green-700 shadow-sm"
           >
             <Plus size={14} /> Новая задача
           </button>
@@ -600,7 +649,6 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   );
 }
 
-// ... остальной код (TaskCard, TaskDetailModal, TaskComments, TaskSubmission, AddTaskModal) остается без изменений
 function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any) {
   const getSafeName = (id: string, fallback: any) => {
     if (!id) return 'Не назначен';
@@ -1170,7 +1218,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 {task.is_archived ? (
                   <button 
                     onClick={() => onToggleArchive(task.id, false)}
-                    className="text-[10px] font-bold uppercase tracking-wider text-green-600 hover:text-green-800 flex items-center gap-1 transition-colors"
+                    className="text-[10px] font-bold uppercase tracking-wider text-green-600 hover:text-green-800 flex items-center gap-1"
                   >
                     <RefreshCw size={12} /> Вернуть из архива
                   </button>
@@ -1178,7 +1226,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                   task.status === 'done' && (
                     <button 
                       onClick={() => onToggleArchive(task.id, true)}
-                      className="text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 flex items-center gap-1 transition-colors"
+                      className="text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 flex items-center gap-1"
                     >
                       <Archive size={12} /> Убрать в архив
                     </button>
@@ -1209,7 +1257,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               isLeader && (
                 <button
                   onClick={() => setShowConfirmDelete(true)}
-                  className="text-[10px] font-bold uppercase tracking-wider text-red-400 hover:text-red-600 flex items-center gap-1 transition-colors"
+                  className="text-[10px] font-bold uppercase tracking-wider text-red-400 hover:text-red-600 flex items-center gap-1"
                 >
                   <Trash2 size={12} /> Удалить
                 </button>

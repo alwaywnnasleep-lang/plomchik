@@ -37,6 +37,11 @@ export function Sidebar({ collapsed, onToggle, unreadCount }: SidebarProps) {
     { path: '/structure', icon: Users, label: 'Оргструктура' },
     { path: '/autoplan', icon: Calendar, label: 'Автоплан' },
     { path: '/notifications', icon: Bell, label: 'Уведомления', badge: unreadCount },
+    {
+  icon: Bell, // Иконка колокольчика из lucide-react
+  label: 'Напоминания',
+  path: '/reminders',
+},
     { path: '/logs', icon: FileText, label: 'Журналы' },
     { path: 'knowledge', icon: FileText, label: 'База знаний' },
     //{ path: '/security', icon: Shield, label: 'Безопасность' },

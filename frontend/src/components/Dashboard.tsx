@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   AlertTriangle, CheckCircle2, Clock, ListTodo, 
-  TrendingUp, Users, FileWarning, ShieldCheck, 
-  Target, ChevronRight
+  TrendingUp, FileWarning, ShieldCheck, 
+  Target, ChevronRight, CalendarDays, Users
 } from 'lucide-react';
 import type { Task } from '@/types';
 import api from '@/services/api';
@@ -11,11 +12,11 @@ import { cn } from '@/utils/cn';
 
 interface DashboardProps {
   tasks: Task[];
-  onTaskClick?: (taskId: string) => void; // Добавили возможность кликать на задачи
 }
 
-export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
+export function Dashboard({ tasks = [] }: DashboardProps) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -28,7 +29,6 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
         let allUsers: any[] = [];
         let hasNext = true;
         
-        // Надежно вытягиваем ВСЕХ пользователей, чтобы имена точно отобразились
         while (hasNext) {
           const response = await api.request(`/users/?page=${page}`).catch(() => null);
           if (!response) break;
@@ -56,22 +56,36 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
     return () => { isMounted = false; };
   }, []);
 
-  // Базовые метрики
-  const total = tasks.length;
-  const done = tasks.filter(t => String(t.status).toLowerCase() === 'done').length;
-  const inProgress = tasks.filter(t => ['in_progress', 'review'].includes(String(t.status).toLowerCase())).length;
+  // Функция для перехода к задаче
+  const handleTaskClick = (taskId: string) => {
+    navigate(`/tasks?taskId=${taskId}`);
+  };
+
+  const isEvent = (task: Task) => {
+    const rawTags: any = task.tags || []; 
+    const tagsArray: any[] = Array.isArray(rawTags) ? rawTags : (typeof rawTags === 'string' ? rawTags.split(',') : []);
+    const tags = tagsArray.map((t: any) => typeof t === 'string' ? t.trim().toLowerCase() : '');
+    return task.is_milestone || tags.includes('мероприятие');
+  };
+
+  const justTasks = tasks.filter(t => !isEvent(t));
+  const justEvents = tasks.filter(t => isEvent(t));
+
+  const totalTasks = justTasks.length;
+  const done = justTasks.filter(t => String(t.status).toLowerCase() === 'done').length;
+  const inProgress = justTasks.filter(t => ['in_progress', 'review'].includes(String(t.status).toLowerCase())).length;
+  const plannedTasks = justTasks.filter(t => ['planned', 'todo'].includes(String(t.status).toLowerCase())).length;
   
-  const critical = tasks.filter(t => 
+  const critical = justTasks.filter(t => 
     String(t.priority).toLowerCase() === 'critical' && 
     String(t.status).toLowerCase() !== 'done'
   ).length;
   
-  const overdue = tasks.filter(t => {
+  const overdue = justTasks.filter(t => {
     if (!t.deadline || String(t.status).toLowerCase() === 'done') return false;
     return new Date(t.deadline) < new Date();
   }).length;
 
-  // Задачи текущего пользователя
   const myActiveTasks = useMemo(() => {
     if (!user) return 0;
     return tasks.filter(t => {
@@ -82,20 +96,13 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
   }, [tasks, user]);
 
   const stats = [
-    { label: 'Всего задач', value: total, icon: ListTodo, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
+    { label: 'Всего задач', value: totalTasks, icon: ListTodo, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
     { label: 'В производстве', value: inProgress, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100' },
     { label: 'Выполнено', value: done, icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
     { label: 'Критичные', value: critical, icon: AlertTriangle, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100' },
     { label: 'Просрочено', value: overdue, icon: FileWarning, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100' },
-    { label: 'Штат (чел.)', value: users.length, icon: Users, color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-100' },
+    { label: 'Запланировано', value: plannedTasks, icon: CalendarDays, color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-100' },
   ];
-
-  const priorityCounts = {
-    critical: tasks.filter(t => String(t.priority).toLowerCase() === 'critical').length,
-    high: tasks.filter(t => String(t.priority).toLowerCase() === 'high').length,
-    medium: tasks.filter(t => String(t.priority).toLowerCase() === 'medium').length,
-    low: tasks.filter(t => String(t.priority).toLowerCase() === 'low').length,
-  };
 
   const statusLabels: Record<string, string> = {
     planned: 'Запланировано',
@@ -108,10 +115,10 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
   const statusCounts = Object.entries(statusLabels).map(([key, label]) => ({
     key,
     label,
-    count: tasks.filter(t => String(t.status).toLowerCase() === key).length,
+    count: justTasks.filter(t => String(t.status).toLowerCase() === key).length,
   }));
 
-  const completionRate = total > 0 ? Math.round((done / total) * 100) : 0;
+  const completionRate = totalTasks > 0 ? Math.round((done / totalTasks) * 100) : 0;
 
   if (loading) {
     return (
@@ -124,7 +131,6 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
   return (
     <div className="space-y-6 pb-10 animate-in fade-in duration-300">
       
-      {/* HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-3">
@@ -151,7 +157,6 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
         </div>
       </div>
 
-      {/* STATS GRID */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {stats.map(s => (
           <div key={s.label} className={cn("bg-white rounded-2xl border p-4 shadow-sm transition-transform hover:-translate-y-1 hover:shadow-md", s.border)}>
@@ -168,13 +173,12 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* РАСПРЕДЕЛЕНИЕ ПО СТАТУСУ */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col">
           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6 flex items-center gap-2">
             <TrendingUp size={18} className="text-blue-500" />
             Воронка задач
           </h3>
-          <div className="space-y-4">
+          <div className="space-y-4 flex-1">
             {statusCounts.map(s => (
               <div key={s.key} className="group">
                 <div className="flex justify-between text-sm mb-1.5">
@@ -189,35 +193,12 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
                       s.key === 'in_progress' ? 'bg-amber-500' :
                       s.key === 'review' ? 'bg-pink-500' : 'bg-blue-500'
                     )}
-                    style={{ width: `${total > 0 ? (s.count / total) * 100 : 0}%` }}
+                    style={{ width: `${totalTasks > 0 ? (s.count / totalTasks) * 100 : 0}%` }}
                   />
                 </div>
               </div>
             ))}
           </div>
-        </div>
-
-        {/* ПРИОРИТЕТЫ И ВЫПОЛНЕНИЕ */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col">
-          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6 flex items-center gap-2">
-            <AlertTriangle size={18} className="text-amber-500" />
-            Уровни приоритета
-          </h3>
-          <div className="space-y-4 flex-1">
-            {[
-              { key: 'critical', label: 'Критический', color: 'bg-red-500', count: priorityCounts.critical },
-              { key: 'high', label: 'Высокий', color: 'bg-orange-500', count: priorityCounts.high },
-              { key: 'medium', label: 'Средний', color: 'bg-amber-500', count: priorityCounts.medium },
-              { key: 'low', label: 'Низкий', color: 'bg-emerald-500', count: priorityCounts.low },
-            ].map(p => (
-              <div key={p.key} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 transition-colors">
-                <div className={`w-3.5 h-3.5 rounded-md ${p.color} shadow-sm`} />
-                <span className="text-sm font-medium text-slate-700 flex-1">{p.label}</span>
-                <span className="text-base font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded-md">{p.count}</span>
-              </div>
-            ))}
-          </div>
-          
           <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-between">
             <div>
               <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Общий прогресс</div>
@@ -229,14 +210,65 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
           </div>
         </div>
 
-        {/* БЛИЖАЙШИЕ ДЕДЛАЙНЫ */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6 flex items-center gap-2">
+            <Users size={18} className="text-indigo-500" />
+            Ближайшие мероприятия
+          </h3>
+          <div className="space-y-3">
+            {justEvents
+              .filter(t => String(t.status).toLowerCase() !== 'done')
+              .sort((a, b) => {
+                const dateA = a.deadline || a.start_date || a.createdAt;
+                const dateB = b.deadline || b.start_date || b.createdAt;
+                return new Date(dateA).getTime() - new Date(dateB).getTime();
+              })
+              .slice(0, 5)
+              .map(event => {
+                const eDate = new Date(event.deadline || event.start_date || event.createdAt);
+                const isToday = eDate.toDateString() === new Date().toDateString();
+                const isPast = eDate < new Date();
+
+                return (
+                  <div 
+                    key={event.id} 
+                    onClick={() => handleTaskClick(event.id)}
+                    className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-indigo-50/30 hover:bg-indigo-50 hover:border-indigo-100 transition-all cursor-pointer group"
+                  >
+                    <div className="mt-1 w-2.5 h-2.5 rounded-full bg-indigo-500 flex-shrink-0 shadow-sm" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold text-indigo-900 truncate group-hover:text-indigo-700 transition-colors">
+                        {event.title}
+                      </div>
+                      <div className="text-xs text-indigo-600/70 mt-1 flex items-center gap-1">
+                        <Clock size={12} />
+                        {eDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      {isToday && <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 uppercase tracking-wider">Сегодня</span>}
+                      {isPast && !isToday && <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-200 text-slate-600 uppercase tracking-wider">Прошло</span>}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {justEvents.filter(t => String(t.status).toLowerCase() !== 'done').length === 0 && (
+                <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                  <CalendarDays size={32} className="mx-auto text-slate-300 mb-2" />
+                  <p className="text-sm text-slate-500 font-medium">Нет активных мероприятий</p>
+                </div>
+              )}
+          </div>
+        </div>
+
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6 flex items-center gap-2">
             <Clock size={18} className="text-red-500" />
-            Ближайшие дедлайны
+            Горящие дедлайны
           </h3>
           <div className="space-y-3">
-            {tasks
+            {justTasks
               .filter(t => String(t.status).toLowerCase() !== 'done' && t.deadline)
               .sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime())
               .slice(0, 5)
@@ -251,7 +283,7 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
                 return (
                   <div 
                     key={t.id} 
-                    onClick={() => onTaskClick && onTaskClick(t.id)}
+                    onClick={() => handleTaskClick(t.id)}
                     className={cn(
                       "flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer group",
                       isOverdue ? "bg-red-50/50 border-red-100 hover:bg-red-50" : 
@@ -277,7 +309,7 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
                     
                     <div className="flex flex-col items-end gap-1">
                       <div className={cn(
-                        "text-xs font-bold px-2 py-0.5 rounded-md", 
+                        "text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-md", 
                         isOverdue ? 'bg-red-100 text-red-700' : 
                         isToday ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'
                       )}>
@@ -289,7 +321,7 @@ export function Dashboard({ tasks = [], onTaskClick }: DashboardProps) {
                 );
               })}
               
-              {tasks.filter(t => String(t.status).toLowerCase() !== 'done' && t.deadline).length === 0 && (
+              {justTasks.filter(t => String(t.status).toLowerCase() !== 'done' && t.deadline).length === 0 && (
                 <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-200">
                   <CheckCircle2 size={32} className="mx-auto text-emerald-400 mb-2" />
                   <p className="text-sm text-slate-500 font-medium">Нет горящих дедлайнов</p>
