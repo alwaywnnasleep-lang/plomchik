@@ -17,7 +17,6 @@ import { cn } from '@/utils/cn';
 import { Profile } from '@/components/Profile';
 import { TaskManagement } from '@/components/TaskManagement';
 import { KnowledgeBase } from '@/components/KnowledgeBase'; 
-import { Reminders } from '@/components/Reminders';
 
 function App() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -182,14 +181,18 @@ function App() {
             <Route path="/autoplan" element={
               <AutoPlan onTasksGenerated={handleTasksGenerated} />
             } />
+            
+            {/* ОБНОВЛЕННЫЙ МАРШРУТ УВЕДОМЛЕНИЙ И НАПОМИНАНИЙ */}
             <Route path="/notifications" element={
               <Notifications 
                 notifications={notifications} 
                 onNotificationsChange={setNotifications} 
+                tasks={tasks}
+                onTasksChange={setTasks}
               />
             } />
-            <Route path="/knowledge" element={<KnowledgeBase />} />
             
+            <Route path="/knowledge" element={<KnowledgeBase />} />
             <Route path="/logs" element={<AuditLogs />} />
             <Route path="/security" element={<SecurityPanel />} />
             <Route path="/docs" element={<DocsPage />} />
@@ -199,13 +202,6 @@ function App() {
                 tasks={tasks} 
                 onTasksChange={setTasks} 
                 searchQuery={searchQuery} 
-              />
-            } />
-            {/* НОВЫЙ МАРШРУТ ДЛЯ НАПОМИНАНИЙ */}
-            <Route path="/reminders" element={
-              <Reminders 
-                tasks={tasks} 
-                onTasksChange={setTasks} 
               />
             } />
             <Route path="/kanban" element={<Navigate to="/tasks" replace />} />

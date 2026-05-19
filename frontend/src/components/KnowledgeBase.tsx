@@ -19,8 +19,10 @@ interface Document {
   created_at: string;
 }
 
+// ИСПРАВЛЕНИЕ: Добавлена категория "Планы"
 const CATEGORIES = [
   { id: 'all', label: 'Все документы' },
+  { id: 'plans', label: 'Планы' },
   { id: 'instructions', label: 'Инструкции' },
   { id: 'regulations', label: 'Регламенты' },
   { id: 'templates', label: 'Шаблоны' },
@@ -376,6 +378,7 @@ function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuccess: (
               onChange={e => setCategory(e.target.value)} 
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 bg-white"
             >
+              <option value="plans">Планы</option>
               <option value="instructions">Инструкции</option>
               <option value="regulations">Регламенты</option>
               <option value="templates">Шаблоны</option>

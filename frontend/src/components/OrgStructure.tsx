@@ -309,7 +309,6 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
       {loading && <div className="text-center py-2 text-sm text-slate-500">Синхронизация данных...</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Tree View */}
         <div className="lg:col-span-2 bg-white rounded-md border border-slate-200 p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
             <Building2 size={18} className="text-slate-500" />
@@ -408,7 +407,6 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
         </div>
       </div>
 
-      {/* History */}
       {showHistory && (
         <div className="bg-white rounded-md border border-slate-200 p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2 border-b border-slate-100 pb-2">
@@ -440,7 +438,6 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
         </div>
       )}
 
-      {/* Modals */}
       {showAddModal && (
         <AddUnitModal
           parentId={addParentId}
@@ -469,7 +466,6 @@ export function OrgStructure({ units = [], onUnitsChange }: OrgStructureProps) {
   );
 }
 
-// ========== TreeNode ==========
 function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete, onEdit, onMovePersonnelBulk, onRemovePersonnel, onUserClick }: {
   node: OrgUnit & { children?: OrgUnit[] };
   depth: number;
@@ -574,11 +570,10 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
             <span title="Редактировать">
               <button onClick={() => onEdit(node)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors"><Edit3 size={16} /></button>
             </span>
-            {node.type !== 'unit' && (
-              <span title="Удалить">
-                <button onClick={() => onDelete(node.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"><Trash2 size={16} /></button>
-              </span>
-            )}
+            {/* ИСПРАВЛЕНИЕ: Удален запрет node.type !== 'unit' */}
+            <span title="Удалить">
+              <button onClick={() => onDelete(node.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"><Trash2 size={16} /></button>
+            </span>
           </div>
         )}
       </div>
@@ -649,7 +644,6 @@ function TreeNode({ node, depth, users, allUnits, canEdit, onAddChild, onDelete,
   );
 }
 
-// ========== ManagePersonnelModal ==========
 function ManagePersonnelModal({ unitId, unitName, unitUsers, allUsers, onClose, onMovePersonnelBulk, onRemovePersonnel, onUserClick }: {
   unitId: string; unitName: string; unitUsers: any[]; allUsers: any[]; onClose: () => void; onMovePersonnelBulk: (userIds: string[], targetUnitId: string) => Promise<void>; onRemovePersonnel: (userId: string) => Promise<void>; onUserClick: (user: any) => void;
 }) {
@@ -804,7 +798,6 @@ function ManagePersonnelModal({ unitId, unitName, unitUsers, allUsers, onClose, 
   );
 }
 
-// ========== AddUnitModal ==========
 function AddUnitModal({ parentId, units, users, onClose, onAdd }: any) {
   const [name, setName] = useState('');
   const [type, setType] = useState<OrgUnit['type']>('group');
@@ -859,7 +852,6 @@ function AddUnitModal({ parentId, units, users, onClose, onAdd }: any) {
   );
 }
 
-// ========== EditUnitModal ==========
 function EditUnitModal({ unit, users, onClose, onSave }: any) {
   const [name, setName] = useState(unit.name);
   const [type, setType] = useState<OrgUnit['type']>(unit.type);
@@ -908,7 +900,6 @@ function EditUnitModal({ unit, users, onClose, onSave }: any) {
   );
 }
 
-// ========== UserCardModal ==========
 function UserCardModal({ user, allUnits, onClose }: { user: any, allUnits: OrgUnit[], onClose: () => void }) {
   const [stats, setStats] = useState({ total: 0, done: 0, inProgress: 0, overdue: 0 });
   const [loadingStats, setLoadingStats] = useState(true);
@@ -917,38 +908,35 @@ function UserCardModal({ user, allUnits, onClose }: { user: any, allUnits: OrgUn
     let isMounted = true;
     const fetchUserStats = async () => {
       try {
-        // 1. Пролистываем ВСЕ страницы с задачами, чтобы собрать полную картину
         let allTasks: any[] = [];
         let page = 1;
         let hasNext = true;
 
         while (hasNext) {
-          const res = await api.getTasks({ page: String(page) });
+          // ИСПРАВЛЕНИЕ ТИПИЗАЦИИ: указываем any
+          const res = await api.getTasks({ page: String(page) }) as any;
           
           if (Array.isArray(res)) {
             allTasks = res;
-            hasNext = false; // Если бэкенд отдал просто массив без страниц
+            hasNext = false; 
           } else if (res && res.results) {
             allTasks = [...allTasks, ...res.results];
-            hasNext = !!res.next; // Идем на следующую страницу, если она есть
+            hasNext = !!res.next; 
             page++;
           } else {
             hasNext = false;
           }
         }
         
-        // 2. Ищем задачи пользователя по всем возможным ключам (assigneeId или assigned_to)
         const userTasks = allTasks.filter((t: any) => {
           const assignedId = t.assigneeId || t.assigned_to || (t.assignee && t.assignee.id);
           return String(assignedId) === String(user.id);
         });
 
         if (isMounted) {
-          // 3. Высчитываем статистику
           setStats({
             total: userTasks.length,
             done: userTasks.filter((t: any) => String(t.status).toLowerCase() === 'done').length,
-            // Считаем "в работе" и те, что на проверке
             inProgress: userTasks.filter((t: any) => ['in_progress', 'review'].includes(String(t.status).toLowerCase())).length,
             overdue: userTasks.filter((t: any) => 
               String(t.status).toLowerCase() !== 'done' && 
@@ -1013,7 +1001,6 @@ function UserCardModal({ user, allUnits, onClose }: { user: any, allUnits: OrgUn
             </div>
           )}
 
-          {/* Блок статистики пользователя */}
           <div className="pt-4 border-t border-slate-100">
             <div className="text-xs text-slate-400 uppercase font-bold tracking-wider mb-3 flex items-center gap-1.5">
               <Activity size={14} /> Эффективность
@@ -1062,7 +1049,6 @@ function UserCardModal({ user, allUnits, onClose }: { user: any, allUnits: OrgUn
   );
 }
 
-// ========== Translation ==========
 const RANK_TRANSLATIONS: Record<string, string> = {
   private: 'рядовой', corporal: 'ефрейтор', sergeant: 'сержант', staff_sergeant: 'старшина',
   warrant_officer: 'прапорщик', lieutenant: 'лейтенант', sr_lieutenant: 'ст. лейтенант',

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { 
-  Bell, Search, Shield, Lock, User, Settings, LogOut, 
-  ChevronDown, BarChart3, Key, BellPlus, X, Save, Clock 
+  Search, Shield, Lock, Settings, LogOut, 
+  ChevronDown, BellPlus, X, Save, Clock, Bell 
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
@@ -72,7 +72,6 @@ export function Header({ currentUser, searchQuery, onSearchChange, unreadCount, 
       setReminderText('');
       setReminderTime('');
       
-      // Чтобы напоминание сразу появилось на всех страницах, делаем мягкую перезагрузку
       window.location.reload(); 
     } catch (error) {
       console.error('Ошибка при создании быстрого напоминания:', error);
@@ -147,44 +146,15 @@ export function Header({ currentUser, searchQuery, onSearchChange, unreadCount, 
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-64 bg-white rounded-sm shadow-xl border border-slate-200 py-1 z-50">
+            <div className="absolute right-0 mt-2 w-48 bg-white rounded-sm shadow-xl border border-slate-200 py-1 z-50">
               <div className="px-4 py-3 border-b border-slate-100">
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-800">{currentUser.rank} {currentUser.fullName}</div>
+                {/* ИСПРАВЛЕНО: добавлено translateRank для выпадающего списка */}
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-800">{translateRank(currentUser.rank)} {currentUser.fullName}</div>
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mt-0.5">{currentUser.position}</div>
               </div>
               
               <button
                 onClick={() => { setMenuOpen(false); navigate('/profile'); }}
-                className="w-full px-4 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-green-50 hover:text-green-700 flex items-center gap-2"
-              >
-                <User size={14} /> Мой профиль
-              </button>
-              
-              <button
-                onClick={() => { setMenuOpen(false); navigate('/profile?tab=stats'); }}
-                className="w-full px-4 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-green-50 hover:text-green-700 flex items-center gap-2"
-              >
-                <BarChart3 size={14} /> Моя статистика
-              </button>
-
-              <button
-                onClick={() => { setMenuOpen(false); navigate('/reminders'); }}
-                className="w-full px-4 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-green-50 hover:text-green-700 flex items-center gap-2"
-              >
-                <Bell size={14} /> Мои напоминания
-              </button>
-              
-              <button
-                onClick={() => { setMenuOpen(false); navigate('/profile?tab=security'); }}
-                className="w-full px-4 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-green-50 hover:text-green-700 flex items-center gap-2"
-              >
-                <Key size={14} /> Безопасность
-              </button>
-              
-              <div className="border-t border-slate-100 my-1"></div>
-              
-              <button
-                onClick={() => { setMenuOpen(false); navigate('/settings'); }}
                 className="w-full px-4 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-green-50 hover:text-green-700 flex items-center gap-2"
               >
                 <Settings size={14} /> Настройки

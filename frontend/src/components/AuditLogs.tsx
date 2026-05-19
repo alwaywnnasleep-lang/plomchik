@@ -11,6 +11,25 @@ const categoryConfig: Record<string, { label: string; icon: typeof Shield; color
   documents: { label: 'Документы', icon: ListTodo, color: 'text-amber-600', bg: 'bg-amber-50 border-amber-100' },
 };
 
+const RANK_TRANSLATIONS: Record<string, string> = {
+  private: 'Рядовой', corporal: 'Ефрейтор', sergeant: 'Сержант', staff_sergeant: 'Старшина',
+  warrant_officer: 'Прапорщик', lieutenant: 'Лейтенант', sr_lieutenant: 'Ст. лейтенант',
+  captain: 'Капитан', major: 'Майор', lt_colonel: 'Подполковник', colonel: 'Полковник',
+};
+
+function translateRank(rank: string): string {
+  if (!rank) return '';
+  return RANK_TRANSLATIONS[rank] || rank;
+}
+
+function getSafeFullName(u: any): string {
+  if (!u) return 'Неизвестный сотрудник';
+  if (u.fullName) return u.fullName;
+  if (u.full_name) return u.full_name;
+  if (u.last_name || u.first_name) return `${u.last_name || ''} ${u.first_name || ''} ${u.patronymic || ''}`.trim();
+  return 'Неизвестный сотрудник';
+}
+
 export function AuditLogs() {
   const [filterCat, setFilterCat] = useState<string>('all');
   const [logs, setLogs] = useState<any[]>([]);
@@ -23,16 +42,12 @@ export function AuditLogs() {
 
   const loadData = async () => {
     try {
-      // Запрашиваем логи и полный список пользователей параллельно
       const [logsData, usersData] = await Promise.all([
         api.getAuditLogs(),
         api.getAllUsers()
       ]);
       
-      // Безопасное извлечение для логов (избегаем TS ошибки)
       const flatLogs = Array.isArray(logsData) ? logsData : ((logsData as any)?.results || []);
-      
-      // Метод getAllUsers уже гарантированно возвращает массив, дополнительных проверок не нужно
       const flatUsers = usersData || [];
       
       setLogs(flatLogs);
@@ -47,15 +62,15 @@ export function AuditLogs() {
   const filtered = filterCat === 'all' ? logs : logs.filter(l => l.category === filterCat);
 
   if (loading) {
-    return <div className="text-center py-8 text-sm text-slate-500">Загрузка журнала событий...</div>;
+    return <div className="text-center py-8 text-sm text-slate-500 font-bold uppercase tracking-wider">Загрузка журнала событий...</div>;
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-in fade-in duration-300">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Журнал событий</h1>
-          <p className="text-sm text-slate-500 mt-1">Отслеживание всех действий в системе</p>
+          <h1 className="text-xl font-bold text-slate-800 uppercase tracking-widest">Журнал событий</h1>
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-1">Отслеживание всех действий в системе</p>
         </div>
       </div>
 
@@ -64,8 +79,8 @@ export function AuditLogs() {
         <button
           onClick={() => setFilterCat('all')}
           className={cn(
-            'text-xs px-4 py-1.5 rounded border transition-colors font-medium',
-            filterCat === 'all' ? 'bg-slate-800 text-white border-slate-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+            'text-[10px] font-bold uppercase tracking-wider px-4 py-2 rounded-md transition-colors',
+            filterCat === 'all' ? 'bg-slate-800 text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
           )}
         >
           Все события
@@ -75,8 +90,8 @@ export function AuditLogs() {
             key={key}
             onClick={() => setFilterCat(key)}
             className={cn(
-              'text-xs px-3 py-1.5 rounded border transition-colors flex items-center gap-1.5 font-medium',
-              filterCat === key ? `${config.bg} ${config.color} border-current shadow-sm` : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              'text-[10px] font-bold uppercase tracking-wider px-3 py-2 rounded-md transition-colors flex items-center gap-1.5',
+              filterCat === key ? `${config.bg} ${config.color} border shadow-sm` : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
             )}
           >
             <config.icon size={14} />
@@ -87,49 +102,51 @@ export function AuditLogs() {
 
       <div className="bg-white rounded-md border border-slate-200 overflow-hidden shadow-sm">
         <div className="overflow-x-auto custom-scrollbar">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="text-left py-3 px-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Категория</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Действие</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Пользователь</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Детали (JSON)</th>
+          <table className="w-full text-left">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Время</th>
+                <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Категория</th>
+                <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Действие</th>
+                <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Пользователь</th>
+                <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">Детали (JSON)</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-100">
               {filtered.length > 0 ? (
                 filtered
                   .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                   .map((log: any) => {
                     const config = categoryConfig[log.category] || categoryConfig.auth;
-                    const userObj = users.find(u => u.id === log.user);
+                    const userObj = users.find(u => String(u.id) === String(log.user));
                     const Icon = config.icon;
                     return (
-                      <tr key={log.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                        <td className="py-3 px-4 text-xs text-slate-500 whitespace-nowrap">
+                      <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3 px-4 text-xs font-bold text-slate-500 whitespace-nowrap">
                           {new Date(log.created_at).toLocaleString('ru-RU')}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
-                          <span className={cn('inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border', config.bg, config.color)}>
+                          <span className={cn('inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-sm border', config.bg, config.color)}>
                             <Icon size={12} />
                             {config.label}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-sm font-medium text-slate-800">{log.action}</td>
+                        <td className="py-3 px-4 text-xs font-bold text-slate-700">{log.action}</td>
                         <td className="py-3 px-4 whitespace-nowrap">
                           {userObj ? (
                             <div className="flex items-center gap-2">
-                              <div className="w-6 h-6 rounded bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 flex-shrink-0">
+                              <div className="w-6 h-6 rounded bg-slate-200 border border-slate-300 flex items-center justify-center text-slate-600 flex-shrink-0">
                                 <User size={12} />
                               </div>
-                              <span className="text-xs font-medium text-slate-700">{userObj.full_name}</span>
+                              <span className="text-xs font-bold text-slate-700">
+                                {translateRank(userObj.rank)} {getSafeFullName(userObj)}
+                              </span>
                             </div>
                           ) : (
-                            <span className="text-xs text-slate-400 italic">Система</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-slate-100 px-2 py-1 rounded-sm">Система</span>
                           )}
                         </td>
-                        <td className="py-3 px-4 text-xs text-slate-500 max-w-xs truncate font-mono bg-slate-50/50" title={JSON.stringify(log.details)}>
+                        <td className="py-3 px-4 text-[10px] text-slate-500 max-w-xs truncate font-mono bg-slate-50/50 rounded-sm" title={JSON.stringify(log.details)}>
                           {JSON.stringify(log.details)}
                         </td>
                       </tr>
@@ -137,7 +154,7 @@ export function AuditLogs() {
                   })
               ) : (
                 <tr>
-                  <td colSpan={5} className="text-center py-10 text-slate-400">
+                  <td colSpan={5} className="text-center py-10 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                     Нет записей в журнале событий
                   </td>
                 </tr>

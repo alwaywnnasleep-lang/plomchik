@@ -1,28 +1,38 @@
 import { useState, useEffect } from 'react';
 import { 
-  User, Shield, Key, Calendar, Award, Star, 
-  CheckCircle, AlertTriangle, Edit2, Save, X, Lock,
-  BarChart3, Activity, Briefcase, Medal
+  User, Shield, Key, Save, Briefcase, Medal, 
+  Lock, Activity, BarChart3, Calendar 
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-
 import api from '@/services/api';
 import { cn } from '@/utils/cn';
 
+const RANK_TRANSLATIONS: Record<string, string> = {
+  private: 'Рядовой', corporal: 'Ефрейтор', sergeant: 'Сержант', staff_sergeant: 'Старшина',
+  warrant_officer: 'Прапорщик', lieutenant: 'Лейтенант', sr_lieutenant: 'Ст. лейтенант',
+  captain: 'Капитан', major: 'Майор', lt_colonel: 'Подполковник', colonel: 'Полковник',
+};
+
+const ROLE_TRANSLATIONS: Record<string, string> = {
+  commander: 'Командир части', deputy_commander: 'Заместитель командира',
+  department_head: 'Начальник отдела', group_head: 'Начальник группы', subordinate: 'Подчиненный',
+};
+
 export function Profile() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'stats'>('profile');
-  const [editMode, setEditMode] = useState(false);
+  
   const [formData, setFormData] = useState({
     first_name: '',
     last_name: '',
     patronymic: '',
   });
+  
   const [passwordData, setPasswordData] = useState({
     old_password: '',
     new_password: '',
     confirm_password: '',
   });
+
   const [userTasks, setUserTasks] = useState<any[]>([]);
   const [userStats, setUserStats] = useState({
     total: 0,
@@ -30,6 +40,7 @@ export function Profile() {
     inProgress: 0,
     overdue: 0,
   });
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
@@ -47,7 +58,8 @@ export function Profile() {
   const loadUserTasks = async () => {
     if (!user || typeof user.id === 'undefined') return;
     try {
-      const tasks = await api.getTasks({ assigned_to: String(user.id) });
+      // ИСПРАВЛЕНИЕ: Явно указываем тип any, чтобы избежать ошибки TS
+      const tasks: any = await api.getTasks({ assigned_to: String(user.id) });
       const tasksArray = Array.isArray(tasks) ? tasks : (tasks.results || []);
       setUserTasks(tasksArray);
       
@@ -71,12 +83,10 @@ export function Profile() {
     setMessage({ type: '', text: '' });
     try {
       await api.updateUser(user.id, formData);
-      setMessage({ type: 'success', text: 'Профиль успешно обновлен' });
-      setEditMode(false);
-      // Обновляем данные пользователя
-      window.location.reload();
+      setMessage({ type: 'success', text: 'Данные успешно обновлены' });
+      setTimeout(() => window.location.reload(), 1000);
     } catch (error) {
-      setMessage({ type: 'error', text: 'Ошибка при обновлении профиля' });
+      setMessage({ type: 'error', text: 'Ошибка при сохранении данных' });
     } finally {
       setLoading(false);
     }
@@ -87,7 +97,6 @@ export function Profile() {
       setMessage({ type: 'error', text: 'Пароли не совпадают' });
       return;
     }
-    
     setLoading(true);
     setMessage({ type: '', text: '' });
     try {
@@ -105,441 +114,234 @@ export function Profile() {
     }
   };
 
-  if (!user) {
-    return <div className="text-center py-8">Загрузка...</div>;
-  }
+  if (!user) return <div className="p-6 text-sm text-slate-500 font-bold uppercase tracking-wider">Загрузка...</div>;
 
-  const getInitials = () => {
-    return `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase();
-  };
-
-  const getAvatarColor = () => {
-    const colors = [
-      'bg-red-600', 'bg-blue-600', 'bg-green-700', 'bg-purple-600', 
-      'bg-amber-600', 'bg-pink-600', 'bg-indigo-600', 'bg-teal-600'
-    ];
-    const index = (user.id || 0) % colors.length;
-    return colors[index];
-  };
-
-  const getRankDisplay = (rank: string) => {
-    const ranks: Record<string, string> = {
-      'private': 'Рядовой',
-      'corporal': 'Ефрейтор',
-      'sergeant': 'Сержант',
-      'staff_sergeant': 'Старшина',
-      'warrant_officer': 'Прапорщик',
-      'lieutenant': 'Лейтенант',
-      'sr_lieutenant': 'Старший лейтенант',
-      'captain': 'Капитан',
-      'major': 'Майор',
-      'lt_colonel': 'Подполковник',
-      'colonel': 'Полковник',
-    };
-    return ranks[rank] || rank;
-  };
-
-  const getRoleDisplay = (role: string) => {
-    const roles: Record<string, string> = {
-      'commander': 'Командир части',
-      'deputy_commander': 'Заместитель командира',
-      'department_head': 'Начальник отдела',
-      'group_head': 'Начальник группы',
-      'subordinate': 'Подчиненный',
-    };
-    return roles[role] || role;
-  };
+  const getInitials = () => `${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`.toUpperCase();
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-4 max-w-6xl mx-auto pb-10">
+      <div className="flex items-center justify-between pb-4 border-b border-slate-200">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Профиль</h1>
-          <p className="text-sm text-slate-500 mt-1">Личные данные и служебная информация</p>
+          <h1 className="text-xl font-bold text-slate-800 uppercase tracking-widest">Учетная запись</h1>
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-1">
+            Настройки профиля, безопасности и личная статистика
+          </p>
         </div>
       </div>
 
-      {/* Вкладки */}
-      <div className="flex gap-2 border-b border-slate-200">
-        <button
-          onClick={() => setActiveTab('profile')}
-          className={cn(
-            'px-4 py-2 text-sm font-medium transition-colors relative',
-            activeTab === 'profile' 
-              ? 'text-green-700 border-b-2 border-green-700' 
-              : 'text-slate-500 hover:text-slate-700'
-          )}
-        >
-          <User size={16} className="inline mr-2" />
-          Профиль
-        </button>
-        <button
-          onClick={() => setActiveTab('security')}
-          className={cn(
-            'px-4 py-2 text-sm font-medium transition-colors relative',
-            activeTab === 'security' 
-              ? 'text-green-700 border-b-2 border-green-700' 
-              : 'text-slate-500 hover:text-slate-700'
-          )}
-        >
-          <Shield size={16} className="inline mr-2" />
-          Безопасность
-        </button>
-        <button
-          onClick={() => setActiveTab('stats')}
-          className={cn(
-            'px-4 py-2 text-sm font-medium transition-colors relative',
-            activeTab === 'stats' 
-              ? 'text-green-700 border-b-2 border-green-700' 
-              : 'text-slate-500 hover:text-slate-700'
-          )}
-        >
-          <BarChart3 size={16} className="inline mr-2" />
-          Статистика
-        </button>
-      </div>
-
-      {/* Сообщения */}
       {message.text && (
         <div className={cn(
-          'p-3 rounded-lg text-sm',
-          message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+          'p-3 rounded-sm text-[11px] font-bold uppercase tracking-wider border shadow-sm',
+          message.type === 'success' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'
         )}>
           {message.text}
         </div>
       )}
 
-      {/* Вкладка профиля */}
-      {activeTab === 'profile' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Левая колонка - аватар и основная информация */}
-          <div className="lg:col-span-1 space-y-4">
-            <div className="bg-white rounded-xl border border-slate-200 p-6 text-center">
-              <div className={cn(
-                'w-32 h-32 rounded-full mx-auto mb-4 flex items-center justify-center text-white text-4xl font-bold border-4 border-green-200',
-                getAvatarColor()
-              )}>
-                {getInitials()}
-              </div>
-              <h2 className="text-xl font-bold text-slate-800">
-                {user.last_name} {user.first_name} {user.patronymic}
-              </h2>
-              <div className="flex items-center justify-center gap-2 mt-2">
-                <Medal size={16} className="text-amber-500" />
-                <p className="text-green-700 font-medium">{getRankDisplay(user.rank)}</p>
-              </div>
-              <div className="flex items-center justify-center gap-2 mt-1">
-                <Briefcase size={16} className="text-blue-500" />
-                <p className="text-sm text-slate-600">{user.position}</p>
-              </div>
-              
-              <div className="mt-4 pt-4 border-t border-slate-100">
-                <div className="flex items-center justify-center gap-2 text-sm">
-                  <Shield size={14} className="text-green-700" />
-                  <span className="text-slate-600">Уровень допуска:</span>
-                  <span className="font-bold text-slate-800">{user.clearance_level}</span>
-                </div>
-                <div className="flex items-center justify-center gap-2 text-sm mt-2">
-                  <Award size={14} className="text-amber-500" />
-                  <span className="text-slate-600">Роль:</span>
-                  <span className="font-medium text-slate-800">{getRoleDisplay(user.role)}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                <Activity size={16} className="text-green-700" />
-                Краткая статистика
-              </h3>
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Всего задач</span>
-                  <span className="font-medium text-slate-800">{userStats.total}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Выполнено</span>
-                  <span className="font-medium text-green-700">{userStats.completed}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">В работе</span>
-                  <span className="font-medium text-blue-600">{userStats.inProgress}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Просрочено</span>
-                  <span className="font-medium text-red-600">{userStats.overdue}</span>
-                </div>
-              </div>
-            </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+        
+        {/* КАРТОЧКА СОТРУДНИКА (Левая колонка) */}
+        <div className="md:col-span-1 bg-white border border-slate-200 rounded-sm p-6 shadow-sm flex flex-col items-center text-center sticky top-20">
+          <div className="w-24 h-24 rounded-sm mb-4 flex items-center justify-center text-white text-3xl font-bold bg-slate-800">
+            {getInitials()}
           </div>
+          
+          <h2 className="text-lg font-bold text-slate-800 leading-tight">
+            {user.last_name} {user.first_name} {user.patronymic}
+          </h2>
+          
+          <div className="flex flex-col gap-2 mt-4 w-full">
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 p-2 rounded-sm text-sm">
+              <Medal size={16} className="text-amber-500 shrink-0" />
+              <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">{RANK_TRANSLATIONS[user.rank] || user.rank}</span>
+            </div>
+            
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 p-2 rounded-sm text-sm">
+              <Briefcase size={16} className="text-blue-500 shrink-0" />
+              <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">{user.position || '—'}</span>
+            </div>
+            
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 p-2 rounded-sm text-sm">
+              <Shield size={16} className="text-green-600 shrink-0" />
+              <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">Допуск: Уровень {user.clearance_level}</span>
+            </div>
 
-          {/* Правая колонка - служебные данные */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-slate-700">Служебная информация</h3>
-                {!editMode ? (
-                  <button
-                    onClick={() => setEditMode(true)}
-                    className="flex items-center gap-1 px-3 py-1 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
-                  >
-                    <Edit2 size={14} />
-                    Редактировать
-                  </button>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setEditMode(false)}
-                      className="flex items-center gap-1 px-3 py-1 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
-                    >
-                      <X size={14} />
-                      Отмена
-                    </button>
-                    <button
-                      onClick={handleProfileUpdate}
-                      disabled={loading}
-                      className="flex items-center gap-1 px-3 py-1 text-sm bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50"
-                    >
-                      <Save size={14} />
-                      Сохранить
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Фамилия</label>
-                    {editMode ? (
-                      <input
-                        type="text"
-                        value={formData.last_name}
-                        onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
-                      />
-                    ) : (
-                      <div className="text-sm text-slate-700 font-medium">{user.last_name || '—'}</div>
-                    )}
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Имя</label>
-                    {editMode ? (
-                      <input
-                        type="text"
-                        value={formData.first_name}
-                        onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
-                      />
-                    ) : (
-                      <div className="text-sm text-slate-700 font-medium">{user.first_name || '—'}</div>
-                    )}
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Отчество</label>
-                    {editMode ? (
-                      <input
-                        type="text"
-                        value={formData.patronymic}
-                        onChange={(e) => setFormData({ ...formData, patronymic: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
-                      />
-                    ) : (
-                      <div className="text-sm text-slate-700 font-medium">{user.patronymic || '—'}</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Звание</label>
-                    <div className="text-sm text-slate-700 font-medium">{getRankDisplay(user.rank)}</div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Должность</label>
-                    <div className="text-sm text-slate-700 font-medium">{user.position}</div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Роль в системе</label>
-                    <div className="text-sm text-slate-700 font-medium">{getRoleDisplay(user.role)}</div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Дата регистрации</label>
-                    <div className="text-sm text-slate-700 flex items-center gap-1">
-                      <Calendar size={12} className="text-slate-400" />
-                      {'date_joined' in user && (user as any).date_joined ? new Date((user as any).date_joined).toLocaleDateString('ru-RU') : '—'}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4">
-                  <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1 block">Уровень допуска</label>
-                    <div className="flex items-center gap-2">
-                      {[1, 2, 3, 4, 5].map((level) => (
-                        <div
-                          key={level}
-                          className={cn(
-                            'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold',
-                            level <= user.clearance_level
-                              ? 'bg-green-700 text-white'
-                              : 'bg-slate-200 text-slate-400'
-                          )}
-                        >
-                          {level}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 p-2 rounded-sm text-sm">
+              <User size={16} className="text-purple-500 shrink-0" />
+              <span className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">{ROLE_TRANSLATIONS[user.role] || user.role}</span>
+            </div>
+            
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-100 p-2 rounded-sm text-sm mt-2 border-t-2 border-t-slate-200">
+              <Activity size={16} className="text-slate-400 shrink-0" />
+              <span className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">
+                В системе с: {'date_joined' in user && (user as any).date_joined ? new Date((user as any).date_joined).toLocaleDateString('ru-RU') : '—'}
+              </span>
             </div>
           </div>
         </div>
-      )}
 
-      {/* Вкладка безопасности */}
-      {activeTab === 'security' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 className="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
-              <Key size={16} className="text-green-700" />
-              Смена пароля
+        {/* НАСТРОЙКИ И СТАТИСТИКА (Правая колонка, занимает 2/3 ширины) */}
+        <div className="md:col-span-2 space-y-4">
+          
+          {/* ЛИЧНЫЕ ДАННЫЕ */}
+          <div className="bg-white border border-slate-200 rounded-sm p-6 shadow-sm">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
+              <User size={16} className="text-green-700" />
+              Редактирование данных
             </h3>
-            <div className="space-y-4">
+            
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
               <div>
-                <label className="text-xs font-medium text-slate-500 mb-1 block">Текущий пароль</label>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Фамилия</label>
                 <input
-                  type="password"
-                  value={passwordData.old_password}
-                  onChange={(e) => setPasswordData({ ...passwordData, old_password: e.target.value })}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                  type="text"
+                  value={formData.last_name}
+                  onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-sm focus:outline-none focus:border-green-600 bg-slate-50 focus:bg-white transition-colors"
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-slate-500 mb-1 block">Новый пароль</label>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Имя</label>
                 <input
-                  type="password"
-                  value={passwordData.new_password}
-                  onChange={(e) => setPasswordData({ ...passwordData, new_password: e.target.value })}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                  type="text"
+                  value={formData.first_name}
+                  onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-sm focus:outline-none focus:border-green-600 bg-slate-50 focus:bg-white transition-colors"
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-slate-500 mb-1 block">Подтверждение пароля</label>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Отчество</label>
                 <input
-                  type="password"
-                  value={passwordData.confirm_password}
-                  onChange={(e) => setPasswordData({ ...passwordData, confirm_password: e.target.value })}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-700/30"
+                  type="text"
+                  value={formData.patronymic}
+                  onChange={(e) => setFormData({ ...formData, patronymic: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-sm focus:outline-none focus:border-green-600 bg-slate-50 focus:bg-white transition-colors"
                 />
               </div>
+            </div>
+            
+            <div className="flex justify-end border-t border-slate-100 pt-4">
               <button
-                onClick={handlePasswordChange}
+                onClick={handleProfileUpdate}
                 disabled={loading}
-                className="w-full py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50"
+                className="flex items-center gap-2 px-6 py-2 text-xs font-bold uppercase tracking-wider bg-green-600 text-white rounded-sm hover:bg-green-700 disabled:opacity-50 transition-colors shadow-sm"
               >
-                {loading ? 'Смена...' : 'Изменить пароль'}
+                <Save size={14} /> Сохранить данные
               </button>
             </div>
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 className="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
-              <Shield size={16} className="text-green-700" />
-              Параметры безопасности
+          {/* БЕЗОПАСНОСТЬ */}
+          <div className="bg-white border border-slate-200 rounded-sm p-6 shadow-sm">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
+              <Key size={16} className="text-green-700" />
+              Смена пароля
             </h3>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Lock size={16} className="text-green-700" />
-                  <span className="text-sm text-slate-700">Таймаут сессии</span>
-                </div>
-                <span className="text-sm font-medium text-slate-800">30 минут</span>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Текущий пароль</label>
+                <input
+                  type="password"
+                  value={passwordData.old_password}
+                  onChange={(e) => setPasswordData({ ...passwordData, old_password: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-sm focus:outline-none focus:border-green-600 bg-slate-50 focus:bg-white transition-colors font-mono"
+                />
               </div>
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Activity size={16} className="text-green-700" />
-                  <span className="text-sm text-slate-700">Последний вход</span>
-                </div>
-                <span className="text-sm text-slate-600">
-                  {'last_login' in user && (user as any).last_login ? new Date((user as any).last_login).toLocaleString('ru-RU') : '—'}
-                </span>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Новый пароль</label>
+                <input
+                  type="password"
+                  value={passwordData.new_password}
+                  onChange={(e) => setPasswordData({ ...passwordData, new_password: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-sm focus:outline-none focus:border-green-600 bg-slate-50 focus:bg-white transition-colors font-mono"
+                />
               </div>
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Star size={16} className="text-amber-500" />
-                  <span className="text-sm text-slate-700">Уровень допуска</span>
-                </div>
-                <span className="text-sm font-bold text-green-700">{user.clearance_level}</span>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Повторите пароль</label>
+                <input
+                  type="password"
+                  value={passwordData.confirm_password}
+                  onChange={(e) => setPasswordData({ ...passwordData, confirm_password: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-sm focus:outline-none focus:border-green-600 bg-slate-50 focus:bg-white transition-colors font-mono"
+                />
               </div>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Вкладка статистики */}
-      {activeTab === 'stats' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 text-slate-600 mb-2">
-                <Activity size={18} />
-                <span className="text-sm">Всего задач</span>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-t border-slate-100 pt-4 gap-4">
+              <div className="flex items-center gap-2 text-slate-400">
+                <Lock size={12} />
+                <span className="text-[10px] font-bold uppercase tracking-wider">Сессия: Активна (защищена)</span>
               </div>
-              <div className="text-3xl font-bold text-slate-800">{userStats.total}</div>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 text-green-700 mb-2">
-                <CheckCircle size={18} />
-                <span className="text-sm">Выполнено</span>
-              </div>
-              <div className="text-3xl font-bold text-green-700">{userStats.completed}</div>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 text-blue-600 mb-2">
-                <Activity size={18} />
-                <span className="text-sm">В работе</span>
-              </div>
-              <div className="text-3xl font-bold text-blue-600">{userStats.inProgress}</div>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 text-red-600 mb-2">
-                <AlertTriangle size={18} />
-                <span className="text-sm">Просрочено</span>
-              </div>
-              <div className="text-3xl font-bold text-red-600">{userStats.overdue}</div>
+              <button
+                onClick={handlePasswordChange}
+                disabled={loading || !passwordData.old_password || !passwordData.new_password}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2 text-xs font-bold uppercase tracking-wider bg-slate-800 text-white rounded-sm hover:bg-slate-900 disabled:opacity-50 transition-colors shadow-sm"
+              >
+                <Shield size={14} /> Обновить пароль
+              </button>
             </div>
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h3 className="text-sm font-semibold text-slate-700 mb-4">Последние задачи</h3>
-            <div className="space-y-2">
-              {userTasks.slice(0, 5).map((task: any) => (
-                <div key={task.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors">
-                  <div>
-                    <div className="text-sm font-medium text-slate-800">{task.title}</div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {task.status === 'done' ? 'Выполнена' : 
-                       task.status === 'in_progress' ? 'В работе' : 
-                       task.status === 'todo' ? 'К выполнению' : 'Запланирована'}
+          {/* СТАТИСТИКА ПОЛЬЗОВАТЕЛЯ */}
+          <div className="bg-white border border-slate-200 rounded-sm p-6 shadow-sm">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800 mb-5 flex items-center gap-2 border-b border-slate-100 pb-3">
+              <BarChart3 size={16} className="text-blue-600" />
+              Личная статистика задач
+            </h3>
+            
+            {/* Плашки с цифрами */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+              <div className="bg-slate-50 border border-slate-200 rounded-sm p-3 shadow-sm text-center transition-transform hover:-translate-y-0.5">
+                <div className="text-[9px] text-slate-500 uppercase font-bold tracking-wider mb-1">Всего</div>
+                <div className="text-2xl font-black text-slate-800">{userStats.total}</div>
+              </div>
+              <div className="bg-green-50 border border-green-200 rounded-sm p-3 shadow-sm text-center transition-transform hover:-translate-y-0.5">
+                <div className="text-[9px] text-green-700 uppercase font-bold tracking-wider mb-1">Выполнено</div>
+                <div className="text-2xl font-black text-green-700">{userStats.completed}</div>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-sm p-3 shadow-sm text-center transition-transform hover:-translate-y-0.5">
+                <div className="text-[9px] text-blue-700 uppercase font-bold tracking-wider mb-1">В работе</div>
+                <div className="text-2xl font-black text-blue-700">{userStats.inProgress}</div>
+              </div>
+              <div className="bg-red-50 border border-red-200 rounded-sm p-3 shadow-sm text-center transition-transform hover:-translate-y-0.5">
+                <div className="text-[9px] text-red-700 uppercase font-bold tracking-wider mb-1">Просрочено</div>
+                <div className="text-2xl font-black text-red-700">{userStats.overdue}</div>
+              </div>
+            </div>
+
+            {/* Последние задачи */}
+            <div>
+              <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-3">Последние назначенные задачи</h4>
+              <div className="space-y-2">
+                {userTasks.slice(0, 5).map((task: any) => (
+                  <div key={task.id} className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-sm hover:border-slate-300 transition-colors shadow-sm">
+                    <div className="flex-1 min-w-0 pr-4">
+                      <div className="text-sm font-bold text-slate-700 truncate" title={task.title}>{task.title}</div>
+                      <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mt-1">
+                        {task.status === 'done' ? <span className="text-green-600">Выполнена</span> : 
+                         task.status === 'in_progress' ? <span className="text-amber-600">В работе</span> : 
+                         task.status === 'todo' ? 'К выполнению' : 'Запланирована'}
+                      </div>
+                    </div>
+                    <div className="text-xs font-bold text-slate-500 flex items-center gap-1.5 whitespace-nowrap bg-slate-50 px-2 py-1 border border-slate-100 rounded-sm">
+                      <Calendar size={12} />
+                      {task.deadline ? new Date(task.deadline).toLocaleDateString('ru-RU') : 'Без срока'}
                     </div>
                   </div>
-                  <div className="text-xs text-slate-400">
-                    {task.deadline ? new Date(task.deadline).toLocaleDateString('ru-RU') : '—'}
+                ))}
+                
+                {userTasks.length === 0 && (
+                  <div className="text-center py-8 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-2 border-dashed border-slate-200 rounded-sm bg-slate-50">
+                    На данный момент у вас нет назначенных задач
                   </div>
-                </div>
-              ))}
-              {userTasks.length === 0 && (
-                <div className="text-center py-8 text-slate-400">Нет задач</div>
-              )}
+                )}
+              </div>
             </div>
           </div>
+
         </div>
-      )}
+      </div>
     </div>
   );
 }

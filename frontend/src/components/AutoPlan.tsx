@@ -7,7 +7,17 @@ import type { Task, TaskStatus } from '@/types';
 import { cn } from '@/utils/cn';
 import api from '@/services/api';
 
-// --- БРОНЕБОЙНЫЙ ПАРСЕР ДАТ ---
+const RANK_TRANSLATIONS: Record<string, string> = {
+  private: 'Рядовой', corporal: 'Ефрейтор', sergeant: 'Сержант', staff_sergeant: 'Старшина',
+  warrant_officer: 'Прапорщик', lieutenant: 'Лейтенант', sr_lieutenant: 'Ст. лейтенант',
+  captain: 'Капитан', major: 'Майор', lt_colonel: 'Подполковник', colonel: 'Полковник',
+};
+
+function translateRank(rank: string): string {
+  if (!rank) return '';
+  return RANK_TRANSLATIONS[rank] || rank;
+}
+
 export const parseSafeDate = (dateStr: any): Date | null => {
   if (!dateStr) return null;
   if (typeof dateStr === 'string') {
@@ -67,8 +77,12 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
   const [step, setStep] = useState<'upload' | 'preview' | 'done'>('upload');
   const [events, setEvents] = useState<ParsedEvent[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  
+  // Добавляем хранение самого файла, чтобы отправить его в Базу знаний позже
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState('');
   const [documentId, setDocumentId] = useState<number | null>(null);
+  
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValues, setEditValues] = useState({ title: '', date: '', responsible: '' });
@@ -86,9 +100,12 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
   const handleFileUpload = async (file: File) => {
     setLoading(true);
     setFileName(file.name);
+    setUploadedFile(file); // Сохраняем файл в стейт
     try {
+      // Отправляем документ только на парсинг
       const result = await api.uploadDocument(file);
       if (!result || !result.id) throw new Error(result?.detail || result?.error || 'Сервер не вернул ID документа.');
+      
       setDocumentId(result.id);
       checkDocumentStatus(result.id);
     } catch (error: any) {
@@ -185,6 +202,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
     }));
     
     try {
+      // 1. Генерируем задачи
       const result = await api.generateTasks(documentId as number, selectedIndices, 'medium', selectedUnits, customEvents);
       const taskList = Array.isArray(result) ? result : (result?.tasks || []);
       
@@ -211,8 +229,6 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
         if (currentTags.length === 0) currentTags.push('автоплан');
         if (isEvent && !currentTags.includes('мероприятие')) currentTags.push('мероприятие');
 
-        // ХИТРОСТЬ: Чтобы бэкенд не скрывал дальние задачи, мы всегда шлем status: 'todo' и is_milestone: false!
-        // Скрывать их из Канбана мы будем на фронтенде по тегу и дате.
         if (t.id) {
            try {
              await api.updateTask(t.id, { 
@@ -239,11 +255,25 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
           deadline: isoDateString,
           start_date: t.start_date || isoDateString,
           createdAt: t.created_at || new Date().toISOString(),
-          is_milestone: false, // На фронте определяем по тегу "мероприятие"
+          is_milestone: false,
           tags: currentTags,
         });
       }
       
+      // 2. ИСПРАВЛЕНИЕ: Отправляем файл в Базу Знаний только после успешной генерации
+      if (uploadedFile) {
+        try {
+          const kbFormData = new FormData();
+          kbFormData.append('title', fileName.split('.')[0] || fileName);
+          kbFormData.append('description', 'План загружен и разобран через модуль Автопланирования');
+          kbFormData.append('category', 'plans');
+          kbFormData.append('file', uploadedFile);
+          await api.uploadKnowledgeDocument(kbFormData);
+        } catch (kbError) {
+          console.warn('Не удалось автоматически сохранить файл в Базу Знаний:', kbError);
+        }
+      }
+
       onTasksGenerated(generatedTasks);
       setStep('done');
     } catch (error) {
@@ -261,7 +291,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
   const selectedCount = events.filter(e => e.selected).length;
 
   return (
-    <div className="space-y-6 relative">
+    <div className="space-y-6 relative animate-in fade-in duration-300">
       <div>
         <h1 className="text-xl font-bold text-slate-800 uppercase tracking-widest">Автопланирование</h1>
         <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-1">Парсинг плана‑календаря и автоматическая генерация задач</p>
@@ -271,8 +301,8 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div
             className={cn(
-              'border-2 border-dashed rounded-md p-12 text-center transition-colors',
-              dragOver ? 'border-green-600 bg-green-50' : 'border-slate-300 bg-white'
+              'border-2 border-dashed rounded-md p-12 text-center transition-colors cursor-pointer',
+              dragOver ? 'border-green-600 bg-green-50' : 'border-slate-300 bg-white hover:bg-slate-50'
             )}
             onDragOver={e => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
@@ -282,6 +312,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
               const file = e.dataTransfer.files[0];
               if (file) handleFileUpload(file);
             }}
+            onClick={() => document.getElementById('file-upload')?.click()}
           >
             <Upload size={48} className="mx-auto text-slate-400 mb-4" />
             <h3 className="text-sm font-bold uppercase tracking-wider text-slate-700 mb-2">Загрузите документ</h3>
@@ -295,7 +326,6 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
               disabled={loading}
             />
             <button
-              onClick={() => document.getElementById('file-upload')?.click()}
               disabled={loading}
               className="px-6 py-2 bg-green-700 text-white rounded-md hover:bg-green-800 text-xs font-bold uppercase tracking-wider disabled:opacity-50 shadow-sm transition-colors"
             >
@@ -328,7 +358,7 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
       )}
 
       {step === 'preview' && (
-        <div className="space-y-4 relative z-10">
+        <div className="space-y-4 relative z-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="bg-white rounded-md border border-slate-200 p-5 shadow-sm">
             
             <div className="flex flex-wrap items-center justify-between mb-4 border-b border-slate-100 pb-4 gap-4">
@@ -362,11 +392,11 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
+            <div className="overflow-x-auto custom-scrollbar">
+              <table className="w-full text-left">
                 <thead>
-                  <tr className="border-b border-slate-200">
-                    <th className="py-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 w-8">
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="py-3 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500 w-8">
                       <input
                         type="checkbox"
                         checked={events.length > 0 && events.every(e => e.selected)}
@@ -374,18 +404,18 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                         className="rounded border-slate-300 text-green-600 focus:ring-green-600 cursor-pointer"
                       />
                     </th>
-                    <th className="py-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 w-1/3">Запись / Мероприятие</th>
-                    <th className="py-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Дата</th>
-                    <th className="py-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Тип</th>
-                    <th className="py-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Ответственный</th>
-                    <th className="py-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Напомнить за</th>
-                    <th className="w-14"></th>
+                    <th className="py-3 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500 w-1/3">Запись / Мероприятие</th>
+                    <th className="py-3 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Дата</th>
+                    <th className="py-3 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Тип</th>
+                    <th className="py-3 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Ответственный</th>
+                    <th className="py-3 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Напомнить за</th>
+                    <th className="w-16"></th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-slate-100">
                   {events.map(e => (
-                    <tr key={e.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                      <td className="py-2 px-2">
+                    <tr key={e.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-2 px-3">
                         <input
                           type="checkbox"
                           checked={e.selected}
@@ -393,18 +423,18 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                           className="rounded border-slate-300 text-green-600 focus:ring-green-600 cursor-pointer"
                         />
                       </td>
-                      <td className="py-2 px-2" style={{ paddingLeft: `${(e.indentLevel || 0) * 16 + 8}px` }}>
+                      <td className="py-2 px-3" style={{ paddingLeft: `${(e.indentLevel || 0) * 16 + 12}px` }}>
                         {editingId === e.id ? (
                           <input
                             value={editValues.title}
                             onChange={e => setEditValues({ ...editValues, title: e.target.value })}
-                            className="border border-slate-300 rounded-md px-2 py-1.5 w-full text-xs outline-none focus:border-green-600"
+                            className="border border-slate-300 rounded-md px-2 py-1 w-full text-xs font-bold outline-none focus:border-green-600 bg-white"
                           />
                         ) : (
                           <div className="flex flex-col">
                             <span className={cn(
                               "font-bold flex items-center gap-1.5 text-xs transition-colors",
-                              e.selected ? "text-slate-700" : "text-slate-400"
+                              e.selected ? "text-slate-800" : "text-slate-400"
                             )}>
                               {((e.indentLevel ?? 0) > 0 || e.parentTitle) && <span className="text-slate-300">↳</span>}
                               {e.title}
@@ -412,31 +442,31 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                           </div>
                         )}
                       </td>
-                      <td className="py-2 px-2 w-32">
+                      <td className="py-2 px-3 w-32">
                         {editingId === e.id ? (
                           <input
                             type="date"
                             value={editValues.date}
                             onChange={e => setEditValues({ ...editValues, date: e.target.value })}
-                            className="border border-slate-300 rounded-md px-2 py-1.5 w-full text-xs outline-none focus:border-green-600"
+                            className="border border-slate-300 rounded-md px-2 py-1 w-full text-xs font-bold outline-none focus:border-green-600 bg-white"
                           />
                         ) : (
                           <span className={cn(
-                            "text-[11px] font-medium flex items-center gap-1.5 whitespace-nowrap",
-                            e.selected ? "text-slate-600" : "text-slate-400"
+                            "text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap",
+                            e.selected ? "text-slate-700" : "text-slate-400"
                           )}>
                             <Calendar size={12} className={e.selected ? "text-slate-400" : "text-slate-300"} />
                             {e.date ? new Date(e.date).toLocaleDateString('ru-RU') : '—'}
                           </span>
                         )}
                       </td>
-                      <td className="py-2 px-2">
+                      <td className="py-2 px-3">
                          <select
                           value={e.itemType}
                           onChange={(ev) => updateItemType(e.id, ev.target.value as 'task' | 'event')}
                           disabled={!e.selected}
                           className={cn(
-                            "text-[10px] font-bold uppercase tracking-wider border rounded-md px-1.5 py-1.5 outline-none transition-colors",
+                            "text-[10px] font-bold uppercase tracking-wider border rounded-md px-2 py-1 outline-none transition-colors cursor-pointer",
                             !e.selected ? "bg-slate-50 border-slate-200 text-slate-400" :
                             e.itemType === 'event' ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-blue-50 border-blue-200 text-blue-700"
                           )}
@@ -446,30 +476,30 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                         </select>
                       </td>
 
-                      <td className="py-2 px-2 text-xs font-medium">
+                      <td className="py-2 px-3 text-xs font-bold text-slate-700">
                         {editingId === e.id ? (
                           <input
                             value={editValues.responsible}
                             onChange={e => setEditValues({ ...editValues, responsible: e.target.value })}
-                            className="border border-slate-300 rounded-md px-2 py-1.5 w-full text-xs outline-none focus:border-green-600"
+                            className="border border-slate-300 rounded-md px-2 py-1 w-full text-xs font-bold outline-none focus:border-green-600 bg-white"
                           />
                         ) : (
                           <span className={cn(
-                            "truncate max-w-[120px] block",
-                            e.selected ? "text-slate-600" : "text-slate-400"
+                            "truncate max-w-[150px] block",
+                            e.selected ? "text-slate-700" : "text-slate-400"
                           )}>
                             {e.responsible || '—'}
                           </span>
                         )}
                       </td>
-                      <td className="py-2 px-2">
+                      <td className="py-2 px-3">
                         <select
                           value={e.remindBefore}
                           onChange={(ev) => updateRemindBefore(e.id, ev.target.value)}
                           disabled={!e.selected}
                           className={cn(
-                            "text-[11px] font-medium border rounded-md px-1.5 py-1.5 outline-none w-full transition-colors",
-                            e.selected ? "border-slate-200 bg-slate-50 focus:border-green-600 text-slate-700" : "border-slate-100 bg-slate-50/50 text-slate-400"
+                            "text-[10px] font-bold uppercase tracking-wider border rounded-md px-2 py-1 outline-none w-full transition-colors cursor-pointer",
+                            e.selected ? "border-slate-200 bg-white focus:border-green-600 text-slate-700" : "border-slate-100 bg-slate-50/50 text-slate-400"
                           )}
                         >
                           {remindOptions.map(opt => (
@@ -477,14 +507,14 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                           ))}
                         </select>
                       </td>
-                      <td className="py-2 px-2 text-right">
+                      <td className="py-2 px-3 text-right">
                         {editingId === e.id ? (
-                          <div className="flex gap-2 justify-end">
-                            <button onClick={() => saveEdit(e.id)} className="text-green-600 hover:text-green-800 bg-green-50 p-1 rounded"><Save size={14} /></button>
-                            <button onClick={cancelEdit} className="text-red-500 hover:text-red-700 bg-red-50 p-1 rounded"><X size={14} /></button>
+                          <div className="flex gap-1 justify-end">
+                            <button onClick={() => saveEdit(e.id)} className="text-green-600 hover:text-white hover:bg-green-600 border border-green-200 p-1 rounded transition-colors shadow-sm"><Save size={14} /></button>
+                            <button onClick={cancelEdit} className="text-red-500 hover:text-white hover:bg-red-500 border border-red-200 p-1 rounded transition-colors shadow-sm"><X size={14} /></button>
                           </div>
                         ) : (
-                          <button onClick={() => startEdit(e)} disabled={!e.selected} className="text-slate-400 hover:text-green-700 bg-slate-50 p-1 rounded hover:bg-green-50 transition-colors disabled:opacity-50"><Edit2 size={14} /></button>
+                          <button onClick={() => startEdit(e)} disabled={!e.selected} className="text-slate-500 hover:text-blue-600 border border-transparent hover:border-blue-200 hover:bg-blue-50 p-1 rounded transition-colors disabled:opacity-50"><Edit2 size={14} /></button>
                         )}
                       </td>
                     </tr>
@@ -495,23 +525,23 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
 
             <div className="flex flex-col md:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-slate-200">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                К генерации: {selectedCount}
+                К генерации: <span className="text-green-600 text-sm">{selectedCount}</span>
               </div>
               
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
                 <button
                   onClick={() => setStep('upload')}
                   disabled={loading}
-                  className="px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-300 rounded-md text-slate-600 hover:bg-slate-50 transition-colors"
+                  className="px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-300 rounded-md text-slate-600 hover:bg-slate-50 transition-colors shadow-sm"
                 >
-                  Назад
+                  Отмена
                 </button>
                 
                 <div className="relative">
                   <button 
                     onClick={() => setIsUnitsMenuOpen(!isUnitsMenuOpen)} 
                     className={cn(
-                      "flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border rounded-md transition-colors",
+                      "flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border rounded-md transition-colors shadow-sm",
                       selectedUnits.length > 0 ? "border-green-600 text-green-700 bg-green-50" : "border-slate-300 text-slate-700 bg-white hover:bg-slate-50"
                     )}
                   >
@@ -532,19 +562,19 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
                               onChange={e => e.target.checked ? setSelectedUnits(units.map(u => u.id)) : setSelectedUnits([])}
                               className="rounded border-slate-300 text-green-600 focus:ring-green-600"
                             />
-                            <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Выбрать все</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-700">Выбрать все</span>
                           </label>
                         </div>
                         <div className="max-h-48 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                           {units.map(u => (
-                            <label key={u.id} className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-slate-50 rounded transition-colors">
+                            <label key={u.id} className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-slate-50 rounded transition-colors border border-transparent hover:border-slate-200">
                               <input 
                                 type="checkbox" 
                                 checked={selectedUnits.includes(u.id)}
                                 onChange={() => setSelectedUnits(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id])}
                                 className="rounded border-slate-300 text-green-600 focus:ring-green-600"
                               />
-                              <span className="text-xs font-medium text-slate-700 truncate">{u.name}</span>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-700 truncate">{u.name}</span>
                             </label>
                           ))}
                         </div>
@@ -555,8 +585,8 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
 
                 <button
                   onClick={handleGenerate}
-                  disabled={loading || selectedCount === 0}
-                  className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider bg-green-700 text-white rounded-md hover:bg-green-800 disabled:opacity-50 transition-colors shadow-sm"
+                  disabled={loading || selectedCount === 0 || selectedUnits.length === 0}
+                  className="flex items-center gap-2 px-6 py-2 text-xs font-bold uppercase tracking-wider bg-green-700 text-white rounded-md hover:bg-green-800 disabled:opacity-50 transition-colors shadow-sm"
                 >
                   <Zap size={14} />
                   {loading ? 'Генерация...' : 'Сгенерировать'}
@@ -568,21 +598,27 @@ export function AutoPlan({ onTasksGenerated }: AutoPlanProps) {
       )}
 
       {step === 'done' && (
-        <div className="bg-white rounded-md border border-slate-200 p-12 text-center shadow-sm">
+        <div className="bg-white rounded-md border border-slate-200 p-12 text-center shadow-sm animate-in zoom-in duration-500">
           <CheckCircle2 size={56} className="mx-auto text-green-600 mb-4" />
           <h3 className="text-lg font-bold uppercase tracking-wider text-slate-800 mb-2">Генерация завершена!</h3>
           <p className="text-sm font-medium text-slate-500 mb-8 leading-relaxed max-w-md mx-auto">
-            Обработано <span className="font-bold text-slate-700">{events.filter(e => e.selected).length}</span> записей из документа «{fileName}».<br/>
+            Обработано <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded">{events.filter(e => e.selected).length}</span> записей из документа «{fileName}».<br/>
             Они направлены в выбранные подразделения.<br/>
-            Записи типа «Мероприятие» и задачи с долгим сроком (более 2 дней) будут показаны только в календаре.
           </p>
           <div className="flex justify-center">
             <button
-              onClick={() => { setStep('upload'); setEvents([]); setFileName(''); setDocumentId(null); setSelectedUnits([]); }}
+              onClick={() => { 
+                setStep('upload'); 
+                setEvents([]); 
+                setFileName(''); 
+                setDocumentId(null); 
+                setSelectedUnits([]); 
+                setUploadedFile(null); // Очищаем файл
+              }}
               className="flex items-center gap-2 px-6 py-2 text-xs font-bold uppercase tracking-wider border border-slate-300 rounded-md text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
             >
               <Plus size={14} />
-              Загрузить ещё один
+              Загрузить новый план
             </button>
           </div>
         </div>

@@ -21,6 +21,17 @@ interface StatisticsProps {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899'];
 
+const RANK_TRANSLATIONS: Record<string, string> = {
+  private: 'Рядовой', corporal: 'Ефрейтор', sergeant: 'Сержант', staff_sergeant: 'Старшина',
+  warrant_officer: 'Прапорщик', lieutenant: 'Лейтенант', sr_lieutenant: 'Ст. лейтенант',
+  captain: 'Капитан', major: 'Майор', lt_colonel: 'Подполковник', colonel: 'Полковник',
+};
+
+function translateRank(rank: string): string {
+  if (!rank) return '';
+  return RANK_TRANSLATIONS[rank] || rank;
+}
+
 const getSafeName = (u: any, fallbackId: string) => {
   if (!u) return `Сотрудник ID-${fallbackId}`;
   if (u.fullName) return u.fullName;
@@ -32,8 +43,8 @@ const getSafeName = (u: any, fallbackId: string) => {
 
 export function Statistics({ 
   tasks = [], 
-  units, // ФИКС: Убран дефолтный массив, чтобы не ломать useEffect
-  users, // ФИКС: Убран дефолтный массив
+  units,
+  users,
   onTasksChange 
 }: StatisticsProps) {
   const { user } = useAuth();
@@ -45,7 +56,6 @@ export function Statistics({
   const [localUnits, setLocalUnits] = useState<OrgUnit[]>([]);
   const [localUsers, setLocalUsers] = useState<UserType[]>([]);
 
-  // ФИКС: Делаем запрос ровно ОДИН раз при монтировании компонента, если данные не переданы
   useEffect(() => {
     if (!units || units.length === 0) {
       api.getAvailableUnits().then((res: any) => setLocalUnits(Array.isArray(res) ? res : res.results || [])).catch(console.error);
@@ -53,7 +63,7 @@ export function Statistics({
     if (!users || users.length === 0) {
       api.getAllUsers().then((res: any) => setLocalUsers(Array.isArray(res) ? res : res.results || [])).catch(console.error);
     }
-  }, []); // <--- ПУСТОЙ МАССИВ, цикл разорван!
+  }, []); 
 
   const displayUnits = units?.length ? units : localUnits;
   const displayUsers = users?.length ? users : localUsers;
@@ -182,11 +192,12 @@ export function Statistics({
     const targetUser = displayUsers.find(u => String(u.id) === id) || extraUsers[id];
     const fallbackObj = idsToLoad.fallbackObjs[id];
 
+    // ИСПРАВЛЕНИЕ: Используем translateRank для перевода звания
     if (targetUser && !targetUser._fetching && !targetUser._error) {
-      return { name: getSafeName(targetUser, id), rank: targetUser.rank || '—', count };
+      return { name: getSafeName(targetUser, id), rank: translateRank(targetUser.rank) || '—', count };
     }
     if (fallbackObj) {
-      return { name: getSafeName(fallbackObj, id), rank: fallbackObj.rank || '—', count };
+      return { name: getSafeName(fallbackObj, id), rank: translateRank(fallbackObj.rank) || '—', count };
     }
     return { name: targetUser?._fetching ? 'Загрузка...' : `Сотрудник ID-${id}`, rank: '—', count };
   }, [idsToLoad, displayUsers, extraUsers]);
@@ -202,8 +213,9 @@ export function Statistics({
     if (idsToLoad.commanderIdToLoad) {
       const cId = idsToLoad.commanderIdToLoad;
       const targetUser = displayUsers.find(u => String(u.id) === cId) || extraUsers[cId];
+      // ИСПРАВЛЕНИЕ: Добавляем переведенное звание к имени командира
       if (targetUser && !targetUser._fetching && !targetUser._error) {
-        commanderName = getSafeName(targetUser, cId);
+        commanderName = `${translateRank(targetUser.rank)} ${getSafeName(targetUser, cId)}`.trim();
       } else if (targetUser?._fetching) {
         commanderName = 'Загрузка...';
       } else {

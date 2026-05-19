@@ -56,9 +56,14 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
     return () => { isMounted = false; };
   }, []);
 
-  // Функция для перехода к задаче
+  // ИСПРАВЛЕНИЕ 1: Перенаправляем клик по задаче в Канбан-доску
   const handleTaskClick = (taskId: string) => {
-    navigate(`/tasks?taskId=${taskId}`);
+    navigate(`/tasks?view=kanban&taskId=${taskId}`);
+  };
+
+  const handleEventClick = (event: Task) => {
+    const eDate = new Date(event.deadline || event.start_date || event.createdAt);
+    navigate(`/tasks?view=calendar&calView=day&date=${eDate.toISOString()}&taskId=${event.id}`);
   };
 
   const isEvent = (task: Task) => {
@@ -68,8 +73,9 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
     return task.is_milestone || tags.includes('мероприятие');
   };
 
-  const justTasks = tasks.filter(t => !isEvent(t));
-  const justEvents = tasks.filter(t => isEvent(t));
+  // ИСПРАВЛЕНИЕ 2: Жестко отсекаем задачи, которые помечены как архивные
+  const justTasks = tasks.filter(t => !isEvent(t) && !t.is_archived && String(t.status).toLowerCase() !== 'archived');
+  const justEvents = tasks.filter(t => isEvent(t) && !t.is_archived && String(t.status).toLowerCase() !== 'archived');
 
   const totalTasks = justTasks.length;
   const done = justTasks.filter(t => String(t.status).toLowerCase() === 'done').length;
@@ -88,16 +94,16 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
 
   const myActiveTasks = useMemo(() => {
     if (!user) return 0;
-    return tasks.filter(t => {
+    return justTasks.filter(t => {
       const isMine = String(t.assigneeId || (t as any).assigned_to) === String(user.id);
       const isDone = String(t.status).toLowerCase() === 'done';
       return isMine && !isDone;
     }).length;
-  }, [tasks, user]);
+  }, [justTasks, user]);
 
   const stats = [
     { label: 'Всего задач', value: totalTasks, icon: ListTodo, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
-    { label: 'В производстве', value: inProgress, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100' },
+    { label: 'В работе', value: inProgress, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100' },
     { label: 'Выполнено', value: done, icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
     { label: 'Критичные', value: critical, icon: AlertTriangle, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100' },
     { label: 'Просрочено', value: overdue, icon: FileWarning, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100' },
@@ -136,7 +142,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
           <h1 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-3">
             Панель управления
           </h1>
-          <p className="text-sm text-slate-500 mt-1 font-medium">Оперативная сводка по войсковой части</p>
+          
         </div>
         
         <div className="flex items-center gap-4">
@@ -176,7 +182,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col">
           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6 flex items-center gap-2">
             <TrendingUp size={18} className="text-blue-500" />
-            Воронка задач
+            Статус задач
           </h3>
           <div className="space-y-4 flex-1">
             {statusCounts.map(s => (
@@ -232,7 +238,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
                 return (
                   <div 
                     key={event.id} 
-                    onClick={() => handleTaskClick(event.id)}
+                    onClick={() => handleEventClick(event)}
                     className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-indigo-50/30 hover:bg-indigo-50 hover:border-indigo-100 transition-all cursor-pointer group"
                   >
                     <div className="mt-1 w-2.5 h-2.5 rounded-full bg-indigo-500 flex-shrink-0 shadow-sm" />
@@ -265,7 +271,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6 flex items-center gap-2">
             <Clock size={18} className="text-red-500" />
-            Горящие дедлайны
+            Истекают сроки задач
           </h3>
           <div className="space-y-3">
             {justTasks
@@ -324,7 +330,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
               {justTasks.filter(t => String(t.status).toLowerCase() !== 'done' && t.deadline).length === 0 && (
                 <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-200">
                   <CheckCircle2 size={32} className="mx-auto text-emerald-400 mb-2" />
-                  <p className="text-sm text-slate-500 font-medium">Нет горящих дедлайнов</p>
+                  <p className="text-sm text-slate-500 font-medium">Нет истекающих сроков задач</p>
                 </div>
               )}
           </div>

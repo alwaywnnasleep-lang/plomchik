@@ -4,6 +4,7 @@ import os
 
 class KnowledgeDocument(models.Model):
     CATEGORY_CHOICES = [
+        ('plans', 'Планы'), # <--- ДОБАВЛЕНО
         ('instructions', 'Инструкции'),
         ('regulations', 'Регламенты'),
         ('templates', 'Шаблоны'),
@@ -18,7 +19,7 @@ class KnowledgeDocument(models.Model):
         settings.AUTH_USER_MODEL, 
         on_delete=models.SET_NULL, 
         null=True, 
-        related_name='knowledge_documents'  # <--- ИСПРАВЛЕНО ЗДЕСЬ
+        related_name='knowledge_documents'
     )
     created_at = models.DateTimeField('Дата загрузки', auto_now_add=True)
 

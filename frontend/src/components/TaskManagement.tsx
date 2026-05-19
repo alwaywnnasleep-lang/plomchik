@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { KanbanBoard } from './KanbanBoard';
 import { Statistics } from './Statistics';
 import { CalendarBoard } from './CalendarBoard';
@@ -16,9 +17,28 @@ interface TaskManagementProps {
 }
 
 export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManagementProps) {
-  const [viewMode, setViewMode] = useState<'kanban' | 'stats' | 'calendar'>('kanban');
+  // ПОДКЛЮЧАЕМ ПАРАМЕТРЫ URL
+  const [searchParams, setSearchParams] = useSearchParams();
+  
+  // СТРОГО ЧИТАЕМ ТЕКУЩИЙ ВИД ИЗ URL (по умолчанию kanban)
+  const viewMode = searchParams.get('view') || 'kanban';
+  
   const [showReportModal, setShowReportModal] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ ВКЛАДОК
+  const handleViewChange = (mode: string) => {
+    setSearchParams(prev => {
+      prev.set('view', mode);
+      // Очищаем хвосты от календаря при уходе с него, чтобы не захламлять URL
+      if (mode !== 'calendar') {
+        prev.delete('calView');
+        prev.delete('date');
+        prev.delete('taskId');
+      }
+      return prev;
+    });
+  };
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -44,7 +64,6 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
 
     tasks.forEach(task => {
       const isStandalone = task.tags?.includes('Напоминание');
-      // Ищем время в reminder_time или deadline
       const rTimeRaw = (task as any).reminder_time || (isStandalone ? task.deadline : null);
       
       if (rTimeRaw) {
@@ -95,23 +114,17 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
   };
 
   const handleTaskDelete = async (taskId: string) => {
-    // Сохраняем предыдущее состояние на случай реальной ошибки
     const previousTasks = [...tasks];
-    
-    // ОПТИМИСТИЧНОЕ ОБНОВЛЕНИЕ: Сразу удаляем и показываем уведомление
     onTasksChange(tasks.filter(t => t.id !== taskId));
     showNotification('Запись успешно удалена');
 
     try {
       await api.deleteTask(parseInt(taskId));
     } catch (error: any) {
-      // Пропускаем ошибку парсинга пустого ответа
       if (error.message?.includes('JSON') || error.name === 'SyntaxError') {
         return;
       }
-      
       console.error(error);
-      // Если ошибка настоящая (например, нет интернета) — возвращаем задачу обратно
       onTasksChange(previousTasks);
       showNotification('Ошибка при удалении', 'error');
     }
@@ -134,19 +147,19 @@ export function TaskManagement({ tasks, onTasksChange, searchQuery }: TaskManage
       <div className="flex items-center justify-between pb-4 border-b border-slate-200">
         <div className="flex items-center gap-1 bg-slate-100/70 p-1 rounded-md border border-slate-200">
           <button
-            onClick={() => setViewMode('kanban')}
+            onClick={() => handleViewChange('kanban')}
             className={cn("px-6 py-2 text-xs font-bold uppercase tracking-wider rounded", viewMode === 'kanban' ? "bg-green-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50")}
           >
             Канбан
           </button>
           <button
-            onClick={() => setViewMode('stats')}
+            onClick={() => handleViewChange('stats')}
             className={cn("px-6 py-2 text-xs font-bold uppercase tracking-wider rounded", viewMode === 'stats' ? "bg-green-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50")}
           >
             Статистика
           </button>
           <button
-            onClick={() => setViewMode('calendar')}
+            onClick={() => handleViewChange('calendar')}
             className={cn("px-6 py-2 text-xs font-bold uppercase tracking-wider rounded", viewMode === 'calendar' ? "bg-green-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50")}
           >
             Календарь

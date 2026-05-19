@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Calendar, Plus, X, AlertTriangle, Tag, MessageCircle, Send, Paperclip,
   Image, FileText, Download, Edit2, Trash2, CheckCircle, Upload, Paperclip as PaperclipIcon, 
-  UserPlus, Users, RefreshCw, Save, Clock, Filter, Archive, ArrowLeft
+  UserPlus, Users, RefreshCw, Save, Clock, Filter, Archive, ArrowLeft, ArrowDownAZ, Shield // <-- Добавлено Shield
 } from 'lucide-react';
 import type { Task, TaskStatus, Priority, User as UserType, TaskFile } from '@/types';
 import { cn } from '@/utils/cn';
@@ -11,6 +11,25 @@ import { useAuth } from '@/contexts/AuthContext';
 import { parseSafeDate } from './AutoPlan';
 import { useSearchParams } from 'react-router-dom';
 
+const RANK_TRANSLATIONS: Record<string, string> = {
+  private: 'Рядовой', corporal: 'Ефрейтор', sergeant: 'Сержант', staff_sergeant: 'Старшина',
+  warrant_officer: 'Прапорщик', lieutenant: 'Лейтенант', sr_lieutenant: 'Ст. лейтенант',
+  captain: 'Капитан', major: 'Майор', lt_colonel: 'Подполковник', colonel: 'Полковник',
+};
+
+function translateRank(rank: string): string {
+  if (!rank) return '';
+  return RANK_TRANSLATIONS[rank] || rank;
+}
+
+function getSafeFullName(u: any): string {
+  if (!u) return 'Неизвестный сотрудник';
+  if (u.fullName) return u.fullName;
+  if (u.full_name) return u.full_name;
+  if (u.last_name || u.first_name) return `${u.last_name || ''} ${u.first_name || ''} ${u.patronymic || ''}`.trim();
+  return 'Неизвестный сотрудник';
+}
+
 const columns: { id: TaskStatus; label: string; color: string; bg: string }[] = [
   { id: 'todo', label: 'К выполнению', color: 'border-blue-400', bg: 'bg-blue-50' },
   { id: 'in_progress', label: 'В работе', color: 'border-amber-400', bg: 'bg-amber-50' },
@@ -18,11 +37,22 @@ const columns: { id: TaskStatus; label: string; color: string; bg: string }[] = 
   { id: 'done', label: 'Выполнено', color: 'border-green-700', bg: 'bg-green-50' },
 ];
 
-const priorityConfig: Record<Priority, { label: string; color: string; bg: string }> = {
-  critical: { label: 'Критический', color: 'text-red-700', bg: 'bg-red-100' },
-  high: { label: 'Высокий', color: 'text-orange-700', bg: 'bg-orange-100' },
-  medium: { label: 'Средний', color: 'text-yellow-700', bg: 'bg-yellow-100' },
-  low: { label: 'Низкий', color: 'text-blue-700', bg: 'bg-blue-100' },
+const priorityConfig: Record<Priority, { label: string; color: string; bg: string; weight: number }> = {
+  critical: { label: 'Критический', color: 'text-red-700', bg: 'bg-red-100', weight: 4 },
+  high: { label: 'Высокий', color: 'text-orange-700', bg: 'bg-orange-100', weight: 3 },
+  medium: { label: 'Средний', color: 'text-yellow-700', bg: 'bg-yellow-100', weight: 2 },
+  low: { label: 'Низкий', color: 'text-blue-700', bg: 'bg-blue-100', weight: 1 },
+};
+
+const formatSubtasksForBackend = (subtasks: any[]) => {
+  return subtasks.map((st: any) => {
+    const isNew = String(st.id).length > 10;
+    return {
+      ...(isNew ? {} : { id: parseInt(st.id) }),
+      title: st.title,
+      status: st.done ? 'done' : 'todo'
+    };
+  });
 };
 
 const normalizeTask = (backendTask: any): Task => {
@@ -52,7 +82,11 @@ const normalizeTask = (backendTask: any): Task => {
     deadline: backendTask.deadline || '',
     start_date: backendTask.start_date || '',
     end_date: backendTask.end_date || '',
-    subtasks: backendTask.subtasks || [],
+    subtasks: (backendTask.subtasks || []).map((st: any) => ({
+      id: st.id?.toString(),
+      title: st.title,
+      done: st.status === 'done'
+    })),
     comments: backendTask.comments || [],
     attachments: backendTask.attachments || [],
     submission: backendTask.submission || null,
@@ -69,7 +103,8 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showArchive, setShowArchive] = useState(false);
   const [archiveSort, setArchiveSort] = useState<string>('date_desc');
-  
+  const [activeSort, setActiveSort] = useState<string>('priority_desc');
+
   const [users, setUsers] = useState<UserType[]>([]);
   const [units, setUnits] = useState<any[]>([]);
 
@@ -82,6 +117,27 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   
   useEffect(() => { onTasksChangeRef.current = onTasksChange; }, [onTasksChange]);
   useEffect(() => { draggedTaskRef.current = draggedTask; }, [draggedTask]);
+
+  useEffect(() => {
+    const taskId = searchParams.get('taskId');
+    const view = searchParams.get('view');
+    if (taskId && view === 'kanban' && tasks.length > 0) {
+      const taskToOpen = tasks.find((t: Task) => String(t.id) === taskId);
+      if (taskToOpen && selectedTask?.id !== taskToOpen.id) {
+        setSelectedTask(taskToOpen);
+      }
+    }
+  }, [searchParams, tasks]);
+
+  const handleCloseModal = () => {
+    setSelectedTask(null);
+    if (searchParams.has('taskId')) {
+      setSearchParams((prev: any) => {
+        prev.delete('taskId');
+        return prev;
+      });
+    }
+  };
 
   useEffect(() => {
     api.getAllUsers().then((res: any) => {
@@ -108,7 +164,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
             const rawTasks = Array.isArray(response) ? response : (response.results || []);
             const freshTasks = rawTasks.map(normalizeTask);
             onTasksChangeRef.current(freshTasks);
-            setSelectedTask(prev => prev ? freshTasks.find((t: Task) => t.id === prev.id) || null : null);
+            setSelectedTask((prev: any) => prev ? freshTasks.find((t: Task) => t.id === prev.id) || null : null);
           }
         } catch (e) {
           console.error('WebSocket Error:', e);
@@ -147,7 +203,6 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
           matchesDeadline = false;
         } else {
           const taskDay = new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate());
-          
           if (filters.deadline === 'overdue') {
             matchesDeadline = taskDate < now && t.status !== 'done';
           } else if (filters.deadline === 'today') {
@@ -161,6 +216,23 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
       return matchesSearch && matchesUnit && matchesMy && matchesDeadline;
     });
   }, [tasks, searchQuery, filters, user?.id]);
+
+  const sortedTasks = useMemo(() => {
+    return [...filteredTasks].sort((a: Task, b: Task) => {
+      if (activeSort === 'date_desc') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (activeSort === 'date_asc') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (activeSort === 'deadline_asc') {
+        const d1 = parseSafeDate(a.deadline)?.getTime() || Infinity;
+        const d2 = parseSafeDate(b.deadline)?.getTime() || Infinity;
+        return d1 - d2;
+      }
+      if (activeSort === 'priority_desc') {
+        return (priorityConfig[b.priority]?.weight || 0) - (priorityConfig[a.priority]?.weight || 0);
+      }
+      if (activeSort === 'title_asc') return a.title.localeCompare(b.title);
+      return 0;
+    });
+  }, [filteredTasks, activeSort]);
 
   const activeFiltersCount = (filters.unit !== 'all' ? 1 : 0) + (filters.onlyMyTasks ? 1 : 0) + (filters.deadline !== 'all' ? 1 : 0);
 
@@ -244,6 +316,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
         description: task.description || '',
         status: 'todo',
         priority: task.priority,
+        subtasks: formatSubtasksForBackend(task.subtasks || []),
       };
 
       if (task.assigneeId) taskData.assigned_to = parseInt(task.assigneeId);
@@ -275,11 +348,15 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
 
   const handleToggleArchive = async (taskId: string, archive: boolean) => {
     try {
-      await api.updateTask(parseInt(taskId), { is_archived: archive });
-      const updatedTasks = tasks.map((t: Task) => t.id === taskId ? { ...t, is_archived: archive } : t);
+      const updatedTasks = tasks.map((t: Task) => 
+        t.id === taskId ? { ...t, is_archived: archive } : t
+      );
       onTasksChange(updatedTasks);
-      setSelectedTask(null);
+      handleCloseModal(); 
+
+      await api.updateTask(parseInt(taskId), { is_archived: archive });
     } catch (error) {
+      onTasksChange(tasks); 
       alert('Ошибка при изменении статуса архива');
     }
   };
@@ -297,26 +374,24 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
     }
 
     archiveList.sort((a: Task, b: Task) => {
-      if (archiveSort === 'date_desc') {
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      } else if (archiveSort === 'date_asc') {
-        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      } else if (archiveSort === 'deadline_asc') {
+      if (archiveSort === 'date_desc') return (new Date(b.createdAt).getTime() || 0) - (new Date(a.createdAt).getTime() || 0);
+      if (archiveSort === 'date_asc') return (new Date(a.createdAt).getTime() || 0) - (new Date(b.createdAt).getTime() || 0);
+      if (archiveSort === 'deadline_asc') {
         const d1 = parseSafeDate(a.deadline)?.getTime() || Infinity;
         const d2 = parseSafeDate(b.deadline)?.getTime() || Infinity;
         return d1 - d2;
-      } else if (archiveSort === 'deadline_desc') {
+      }
+      if (archiveSort === 'deadline_desc') {
         const d1 = parseSafeDate(a.deadline)?.getTime() || 0;
         const d2 = parseSafeDate(b.deadline)?.getTime() || 0;
         return d2 - d1;
-      } else if (archiveSort === 'title_asc') {
-        return a.title.localeCompare(b.title);
       }
+      if (archiveSort === 'title_asc') return a.title.localeCompare(b.title);
       return 0;
     });
 
     return (
-      <div className="space-y-4 relative bg-white border border-slate-200 rounded-md shadow-sm p-6 min-h-[600px]">
+      <div className="space-y-4 relative bg-white border border-slate-200 rounded-md shadow-sm p-6 min-h-[600px] animate-in fade-in">
         <div className="flex items-center justify-between border-b border-slate-200 pb-4 mb-4 flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <button 
@@ -351,8 +426,8 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
         </div>
 
         {archiveList.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="py-3 px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500">ID</th>
@@ -368,21 +443,21 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                   const unit = units.find((u: any) => String(u.id) === String(task.unitId));
                   const parsedDeadline = parseSafeDate(task.deadline);
                   return (
-                    <tr key={task.id} className="hover:bg-slate-50">
+                    <tr key={task.id} className="hover:bg-slate-50 transition-colors">
                       <td className="py-3 px-4 text-xs text-slate-400 font-mono">#{task.id}</td>
                       <td className="py-3 px-4">
                         <button 
                           onClick={() => setSelectedTask(task)}
-                          className="font-bold text-slate-700 hover:text-green-600 text-left"
+                          className="font-bold text-slate-700 hover:text-green-600 text-left text-sm"
                         >
                           {task.title}
                         </button>
                       </td>
-                      <td className="py-3 px-4 text-xs font-medium text-slate-600">
+                      <td className="py-3 px-4 text-xs font-bold text-slate-600">
                         {parsedDeadline ? parsedDeadline.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
                       </td>
-                      <td className="py-3 px-4 text-xs font-medium text-slate-600">{unit?.name || '—'}</td>
-                      <td className="py-3 px-4 text-xs font-medium text-slate-600">
+                      <td className="py-3 px-4 text-xs font-bold text-slate-600">{unit?.name || '—'}</td>
+                      <td className="py-3 px-4 text-xs font-bold text-slate-600">
                         {new Date(task.createdAt).toLocaleDateString('ru-RU')}
                       </td>
                       <td className="py-3 px-4 text-right">
@@ -403,7 +478,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Archive size={48} className="text-slate-300 mb-4" />
             <h3 className="text-sm font-bold uppercase tracking-wider text-slate-600">Архив пуст</h3>
-            <p className="text-xs font-medium text-slate-400 mt-2">Не найдено задач, соответствующих фильтрам.</p>
+            <p className="text-xs font-bold text-slate-400 mt-2">Не найдено задач, соответствующих фильтрам.</p>
           </div>
         )}
 
@@ -413,7 +488,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
             users={users}
             units={units}
             currentUser={user}
-            onClose={() => setSelectedTask(null)}
+            onClose={handleCloseModal}
             onUpdate={(updated) => {
               onTasksChange(tasks.map((t: Task) => t.id === updated.id ? updated : t));
               setSelectedTask(updated);
@@ -422,9 +497,14 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
               try {
                 await api.deleteTask(parseInt(id));
                 onTasksChange(tasks.filter((t: Task) => t.id !== id));
-                setSelectedTask(null);
-              } catch (error) {
-                alert('Ошибка при удалении задачи');
+                handleCloseModal();
+              } catch (error: any) {
+                if (error.message?.includes('No Task matches')) {
+                  onTasksChange(tasks.filter((t: Task) => t.id !== id));
+                  handleCloseModal();
+                } else {
+                  alert('Ошибка при удалении задачи');
+                }
               }
             }}
             onToggleArchive={handleToggleArchive}
@@ -435,13 +515,28 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   }
 
   return (
-    <div className="space-y-4 relative">
+    <div className="space-y-4 relative animate-in fade-in duration-300">
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-          Активных задач: {filteredTasks.filter((t: Task) => !t.is_archived && !t.is_milestone && !(t.tags || []).some(tag => String(tag).toLowerCase() === 'мероприятие')).length}
+          Активных задач: <span className="text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">{sortedTasks.filter((t: Task) => !t.is_archived && String(t.status).toLowerCase() !== 'archived' && !t.is_milestone && !(t.tags || []).some(tag => String(tag).toLowerCase() === 'мероприятие')).length}</span>
         </span>
         
         <div className="flex items-center gap-2">
+          <div className="relative flex items-center gap-1.5 border border-slate-200 rounded-md shadow-sm bg-white px-2 py-1">
+            <ArrowDownAZ size={14} className="text-slate-400" />
+            <select
+              value={activeSort}
+              onChange={e => setActiveSort(e.target.value)}
+              className="text-xs font-bold uppercase tracking-wider text-slate-600 bg-transparent focus:outline-none cursor-pointer"
+            >
+              <option value="priority_desc">Сначала важные</option>
+              <option value="deadline_asc">Ближайший дедлайн</option>
+              <option value="date_desc">Новые</option>
+              <option value="date_asc">Старые</option>
+              <option value="title_asc">По алфавиту (А-Я)</option>
+            </select>
+          </div>
+
           <button 
             onClick={() => setShowArchive(true)}
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-md shadow-sm"
@@ -489,7 +584,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                     <select
                       value={filters.unit}
                       onChange={e => setFilters({ ...filters, unit: e.target.value })}
-                      className="w-full text-sm border border-slate-200 rounded px-3 py-2 bg-slate-50 hover:bg-white focus:outline-none focus:border-green-500"
+                      className="w-full text-sm font-bold border border-slate-200 rounded px-3 py-2 bg-slate-50 hover:bg-white focus:outline-none focus:border-green-500 cursor-pointer"
                     >
                       <option value="all">Все подразделения</option>
                       {units.map((u: any) => (
@@ -503,7 +598,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                     <select
                       value={filters.deadline}
                       onChange={e => setFilters({ ...filters, deadline: e.target.value })}
-                      className="w-full text-sm border border-slate-200 rounded px-3 py-2 bg-slate-50 hover:bg-white focus:outline-none focus:border-green-500"
+                      className="w-full text-sm font-bold border border-slate-200 rounded px-3 py-2 bg-slate-50 hover:bg-white focus:outline-none focus:border-green-500 cursor-pointer"
                     >
                       <option value="all">Всё время</option>
                       <option value="overdue">⚠️ Просроченные</option>
@@ -512,12 +607,12 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                     </select>
                   </div>
 
-                  <label className="flex items-center gap-3 cursor-pointer p-2 -ml-2 hover:bg-slate-50 rounded">
+                  <label className="flex items-center gap-3 cursor-pointer p-2 -ml-2 hover:bg-slate-50 rounded border border-transparent hover:border-slate-100 transition-colors">
                     <input 
                       type="checkbox" 
                       checked={filters.onlyMyTasks}
                       onChange={e => setFilters({ ...filters, onlyMyTasks: e.target.checked })}
-                      className="w-4 h-4 rounded border-slate-300 text-green-600 focus:ring-green-600"
+                      className="w-4 h-4 rounded border-slate-300 text-green-600 focus:ring-green-600 cursor-pointer"
                     />
                     <span className="text-xs font-bold uppercase text-slate-600">Мои задачи</span>
                   </label>
@@ -540,16 +635,14 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
       )}
 
       {/* ДОСКА С 4 КОЛОНКАМИ */}
-      <div className="flex gap-4 overflow-x-auto pb-4 items-start">
+      <div className="flex gap-4 overflow-x-auto pb-4 items-start custom-scrollbar">
         {columns.map(col => {
-          const colTasks = filteredTasks.filter((t: Task) => {
-            // ЛОГИКА ФИЛЬТРАЦИИ 1: Полностью скрываем Мероприятия с доски (ориентируемся на тег)
+          const colTasks = sortedTasks.filter((t: Task) => {
             const isEvent = t.is_milestone || (t.tags || []).some(tag => String(tag).toLowerCase() === 'мероприятие');
-            if (isEvent || t.is_archived) return false;
+            if (isEvent || t.is_archived || String(t.status).toLowerCase() === 'archived') return false;
             
             const tStatus = (t.status || 'todo').toLowerCase();
             
-            // ЛОГИКА ФИЛЬТРАЦИИ 2: Для колонки "К выполнению" скрываем далекие задачи
             if (col.id === 'todo') {
               const parsedD = parseSafeDate(t.deadline || t.start_date || t.createdAt);
               if (parsedD) {
@@ -559,13 +652,10 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                  taskDate.setHours(12, 0, 0, 0);
                  
                  const diffDays = Math.ceil((taskDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                 if (diffDays > 2) {
-                     return false; // Скрываем, если до дедлайна больше 2 дней
-                 }
+                 if (diffDays > 2) return false; 
               }
               return ['todo', 'new', 'pending', 'planned'].includes(tStatus);
             }
-            
             return tStatus === col.id;
           });
 
@@ -578,14 +668,14 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
             >
               <div className={cn('px-4 py-3 border-b border-slate-200 bg-white rounded-t-md', col.color, 'border-t-4')}>
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-slate-700">{col.label}</h3>
-                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">{col.label}</h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
                     {colTasks.length}
                   </span>
                 </div>
               </div>
 
-              <div className="p-2 flex-1 overflow-y-auto space-y-2">
+              <div className="p-2 flex-1 overflow-y-auto space-y-2 custom-scrollbar">
                 {colTasks.map((task: Task) => (
                   <TaskCard
                     key={task.id}
@@ -598,7 +688,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                   />
                 ))}
                 {colTasks.length === 0 && (
-                  <div className="p-4 text-center text-sm text-slate-400 border-2 border-dashed border-slate-200 rounded-md">
+                  <div className="p-4 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400 border-2 border-dashed border-slate-200 rounded-md">
                     Нет задач
                   </div>
                 )}
@@ -623,7 +713,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
           users={users}
           units={units}
           currentUser={user}
-          onClose={() => setSelectedTask(null)}
+          onClose={handleCloseModal}
           onUpdate={(updated) => {
             onTasksChange(tasks.map((t: Task) => t.id === updated.id ? updated : t));
             setSelectedTask(updated);
@@ -632,11 +722,11 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
             try {
               await api.deleteTask(parseInt(id));
               onTasksChange(tasks.filter((t: Task) => t.id !== id));
-              setSelectedTask(null);
+              handleCloseModal();
             } catch (error: any) {
               if (error.message?.includes('No Task matches')) {
                 onTasksChange(tasks.filter((t: Task) => t.id !== id));
-                setSelectedTask(null);
+                handleCloseModal();
               } else {
                 alert('Ошибка при удалении задачи');
               }
@@ -654,14 +744,27 @@ function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any)
     if (!id) return 'Не назначен';
     const user = users.find((u: any) => String(u.id) === id) || extraUsers[id];
     if (user && !user._fetching && !user._error) {
-      return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim() || 'Сотрудник';
+      return getSafeFullName(user);
     }
     if (fallback && fallback.full_name) return fallback.full_name;
     return user?._fetching ? 'Загрузка...' : `ID ${id}`;
   };
 
+  const getRank = (id: string, fallback: any) => {
+    if (!id) return '';
+    const user = users.find((u: any) => String(u.id) === id) || extraUsers[id];
+    if (user && !user._fetching && !user._error) {
+      return translateRank(user.rank);
+    }
+    if (fallback && fallback.rank) return translateRank(fallback.rank);
+    return '';
+  };
+
   const assigneeName = getSafeName(task.assigneeId, task.assignee);
+  const assigneeRank = getRank(task.assigneeId, task.assignee);
   const creatorName = getSafeName(task.creatorId, task.creator);
+  const creatorRank = getRank(task.creatorId, task.creator);
+  
   const unit = units.find((u: any) => String(u.id) === String(task.unitId));
 
   const parsedDeadline = parseSafeDate(task.deadline);
@@ -680,7 +783,7 @@ function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any)
       onDragStart={onDragStart}
       onClick={onClick}
       className={cn(
-        "bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing hover:border-slate-300 shadow-sm",
+        "bg-white rounded-md border p-3 cursor-grab active:cursor-grabbing hover:border-slate-300 shadow-sm transition-colors",
         isUnassigned ? "border-dashed border-slate-300 bg-slate-50" : "border-slate-200"
       )}
     >
@@ -688,13 +791,13 @@ function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any)
         <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded truncate max-w-[70%]">
           {unit?.name || 'Подразделение'}
         </span>
-        <span className="text-[10px] font-mono text-slate-400 shrink-0">#{task.id}</span>
+        <span className="text-[10px] font-mono font-bold text-slate-400 shrink-0">#{String(task.id || '').slice(0, 6)}</span>
       </div>
 
       <h4 className="text-sm font-bold text-slate-800 leading-snug mb-1">{task.title}</h4>
       
       {task.description && (
-        <p className="text-[11px] text-slate-500 line-clamp-2 mb-3 leading-relaxed">
+        <p className="text-[11px] font-medium text-slate-500 line-clamp-2 mb-3 leading-relaxed">
           {task.description}
         </p>
       )}
@@ -702,29 +805,29 @@ function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any)
       <div className="bg-slate-50 border border-slate-100 rounded p-2 mb-3 grid grid-cols-2 gap-2">
         <div>
           <div className="text-[9px] text-slate-400 uppercase font-bold mb-0.5">Постановщик</div>
-          <div className="text-xs font-medium text-slate-700 truncate" title={creatorName}>{creatorName}</div>
+          <div className="text-xs font-bold text-slate-700 truncate" title={`${creatorRank} ${creatorName}`}>{creatorRank} {creatorName}</div>
         </div>
         <div>
           <div className="text-[9px] text-slate-400 uppercase font-bold mb-0.5">Исполнитель</div>
-          <div className={cn("text-xs font-medium truncate", isUnassigned ? "text-amber-600" : "text-slate-700")} title={assigneeName}>
-            {isUnassigned ? 'Свободная задача' : assigneeName}
+          <div className={cn("text-xs font-bold truncate", isUnassigned ? "text-amber-600" : "text-slate-700")} title={isUnassigned ? 'Свободная задача' : `${assigneeRank} ${assigneeName}`}>
+            {isUnassigned ? 'Свободная задача' : `${assigneeRank} ${assigneeName}`}
           </div>
         </div>
       </div>
 
       <div className="space-y-2 mb-3">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded', pConfig.bg, pConfig.color)}>
+          <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider', pConfig.bg, pConfig.color)}>
             {pConfig.label}
           </span>
           {task.tags?.slice(0, 2).map((tag: string) => (
-            <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">{tag}</span>
+            <span key={tag} className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">{tag}</span>
           ))}
         </div>
 
         {subtasksTotal > 0 && (
           <div className="pt-1">
-            <div className="flex justify-between text-[10px] text-slate-500 mb-1 font-bold">
+            <div className="flex justify-between text-[10px] text-slate-500 mb-1 font-bold uppercase tracking-wider">
               <span>Подзадачи</span>
               <span>{subtasksDone} / {subtasksTotal}</span>
             </div>
@@ -736,10 +839,10 @@ function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any)
 
         {task.submission && (
           <div className={cn(
-            'text-[10px] px-2 py-1 rounded border font-bold flex items-center gap-1.5 mt-1', 
+            'text-[10px] px-2 py-1 rounded border font-bold uppercase tracking-wider flex items-center gap-1.5 mt-1', 
             task.submission.status === 'approved' ? 'bg-green-50 text-green-700 border-green-200' : 
             task.submission.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-200' : 
-            'bg-yellow-50 text-yellow-700 border-yellow-200'
+            'bg-amber-50 text-amber-700 border-amber-200'
           )}>
             {task.submission.status === 'approved' ? <CheckCircle size={12}/> : task.submission.status === 'rejected' ? <X size={12}/> : <Clock size={12}/>}
             {task.submission.status === 'approved' ? 'Отчет принят' : task.submission.status === 'rejected' ? 'Возвращено на доработку' : 'Отчет на проверке'}
@@ -748,7 +851,7 @@ function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any)
       </div>
 
       <div className="flex items-center justify-between border-t border-slate-100 pt-2">
-        <div className={cn("flex items-center gap-1.5 text-[11px] font-bold", isOverdue ? "text-red-600" : "text-slate-600")}>
+        <div className={cn("flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider", isOverdue ? "text-red-600" : "text-slate-600")}>
           <Calendar size={12} />
           {parsedDeadline ? parsedDeadline.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Без срока'}
         </div>
@@ -779,13 +882,15 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
   const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'submission' | 'attachments'>('details');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
-  
   const [isEditingTask, setIsEditingTask] = useState(false);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+
   const [editData, setEditData] = useState({
     title: task.title,
     description: task.description,
     priority: task.priority,
-    deadline: task.deadline ? (parseSafeDate(task.deadline)?.toISOString().slice(0, 16) || '') : ''
+    deadline: task.deadline ? (parseSafeDate(task.deadline)?.toISOString().slice(0, 16) || '') : '',
+    subtasks: task.subtasks || []
   });
 
   const assignee = users.find(u => u.id.toString() === task.assigneeId);
@@ -817,6 +922,8 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
         assigned_to: userId ? parseInt(userId) : null,
         status: 'in_progress' 
       });
+      // Обновляем локально для быстроты интерфейса
+      onUpdate({ ...task, assigneeId: userId, status: 'in_progress' });
     } catch (e) {
       console.error(e);
       alert('Ошибка при назначении задачи');
@@ -827,45 +934,73 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
   const handleSaveEditTask = async () => {
     try {
-      await api.updateTask(parseInt(task.id), {
+      const payload = {
         title: editData.title,
         description: editData.description,
         priority: editData.priority,
-        deadline: editData.deadline
-      });
+        deadline: editData.deadline,
+        subtasks: formatSubtasksForBackend(editData.subtasks)
+      };
+      await api.updateTask(parseInt(task.id), payload);
+      onUpdate({ ...task, ...payload, subtasks: editData.subtasks } as any);
       setIsEditingTask(false);
     } catch (error) {
       alert('Ошибка при сохранении задачи');
     }
   };
 
-  const getAssigneeFullName = (user: any) => {
-    return user.fullName || user.full_name || `${user.last_name || ''} ${user.first_name || ''}`.trim() || 'Сотрудник';
+  const handleAddSubtask = () => {
+    if (!newSubtaskTitle.trim()) return;
+    setEditData(prev => ({
+      ...prev,
+      subtasks: [...(prev.subtasks || []), { id: Date.now().toString(), title: newSubtaskTitle, done: false }]
+    }));
+    setNewSubtaskTitle('');
   };
 
-  const getAssigneeInitials = (user: any) => {
-    const fullName = getAssigneeFullName(user);
+  const handleRemoveSubtask = (idToRemove: string) => {
+    setEditData(prev => ({
+      ...prev,
+      subtasks: (prev.subtasks || []).filter((st: any) => st.id !== idToRemove)
+    }));
+  };
+
+  const handleToggleSubtaskCheckbox = async (stId: string) => {
+    const newSubtasks = (task.subtasks || []).map(st => st.id === stId ? { ...st, done: !st.done } : st);
+    const updatedTask = { ...task, subtasks: newSubtasks };
+    onUpdate(updatedTask);
+    
+    try {
+      await api.updateTask(parseInt(task.id), { subtasks: formatSubtasksForBackend(newSubtasks) });
+    } catch (e) {
+      alert('Ошибка обновления подзадачи');
+    }
+  };
+
+  const getAssigneeFullName = (u: any) => getSafeFullName(u);
+  const getAssigneeInitials = (u: any) => {
+    const fullName = getAssigneeFullName(u);
     return fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
   const renderFileList = (files: TaskFile[]) => {
-    if (!files || files.length === 0) return <p className="text-sm text-slate-500">Нет вложений</p>;
+    if (!files || files.length === 0) return <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Нет вложений</p>;
     return (
       <div className="space-y-2">
         {files.map(file => {
           const fileName = file.fileName || file.filename || 'Файл';
           const fileUrl = file.fileUrl || file.file;
           return (
-            <div key={file.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-md">
+            <div key={file.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-md border border-slate-200">
               {fileName.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i) ? (
                 <Image size={16} className="text-slate-400" />
               ) : (
                 <FileText size={16} className="text-slate-400" />
               )}
-              <span className="text-sm text-slate-600 flex-1 truncate">{fileName}</span>
+              <span className="text-xs font-bold text-slate-600 flex-1 truncate">{fileName}</span>
               {fileUrl && (
-                <a href={fileUrl} download={fileName} className="p-1 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
-                  <Download size={14} className="text-slate-500" />
+                <a href={fileUrl} download={fileName} className="p-1.5 bg-white border border-slate-300 hover:bg-slate-100 rounded transition-colors shadow-sm" target="_blank" rel="noopener noreferrer">
+                  <Download size={14} className="text-slate-600" />
                 </a>
               )}
             </div>
@@ -878,36 +1013,36 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
   const parsedModalDeadline = parseSafeDate(task.deadline);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-md w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="p-6 pb-2 border-b border-slate-200">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-md w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="p-6 pb-2 border-b border-slate-200 bg-slate-50">
           <div className="flex items-start justify-between">
             <div className="flex-1 pr-4">
               <div className="flex items-center gap-2 mb-2">
-                <span className={cn('text-xs font-bold px-2 py-0.5 rounded', pConfig.bg, pConfig.color)}>
+                <span className={cn('text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded', pConfig.bg, pConfig.color)}>
                   {pConfig.label}
                 </span>
                 {task.is_archived && (
-                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600 flex items-center gap-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-200 text-slate-600 flex items-center gap-1">
                     <Archive size={12} /> Архив
                   </span>
                 )}
-                <span className="text-xs text-slate-400 font-mono">#{String(task.id || '').slice(0, 6)}</span>
+                <span className="text-[10px] font-bold text-slate-400 font-mono">#{String(task.id || '').slice(0, 6)}</span>
               </div>
               
               {isEditingTask ? (
                 <input 
                   value={editData.title}
                   onChange={e => setEditData({...editData, title: e.target.value})}
-                  className="w-full text-lg font-bold border-b-2 border-green-600 bg-slate-50 px-2 py-1 outline-none mb-2"
+                  className="w-full text-lg font-bold border-b-2 border-green-600 bg-white px-3 py-2 outline-none mb-2 shadow-sm rounded-sm"
                 />
               ) : (
-                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 leading-tight">
                   {task.title}
                   {(isCreator || isLeader) && (
                     <button 
                       onClick={() => setIsEditingTask(true)} 
-                      className="text-slate-300 hover:text-green-600"
+                      className="text-slate-300 hover:text-green-600 transition-colors"
                       title="Редактировать"
                     >
                       <Edit2 size={16} />
@@ -916,16 +1051,16 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 </h2>
               )}
             </div>
-            <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600">
+            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors">
               <X size={20} />
             </button>
           </div>
 
-          <div className="flex gap-4 mt-4 overflow-x-auto no-scrollbar">
+          <div className="flex gap-4 mt-4 overflow-x-auto custom-scrollbar">
             <button
               onClick={() => setActiveTab('details')}
               className={cn(
-                'pb-2 text-xs uppercase tracking-wider font-bold relative whitespace-nowrap',
+                'pb-3 text-xs uppercase tracking-wider font-bold relative whitespace-nowrap transition-colors',
                 activeTab === 'details' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
@@ -934,13 +1069,13 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('comments')}
               className={cn(
-                'pb-2 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1 whitespace-nowrap',
+                'pb-3 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1.5 whitespace-nowrap transition-colors',
                 activeTab === 'comments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
               Обсуждение
               {task.comments && task.comments.length > 0 && (
-                <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded ml-1">
+                <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
                   {task.comments.length}
                 </span>
               )}
@@ -948,14 +1083,14 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('attachments')}
               className={cn(
-                'pb-2 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1 whitespace-nowrap',
+                'pb-3 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1.5 whitespace-nowrap transition-colors',
                 activeTab === 'attachments' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
               <PaperclipIcon size={14} />
               Вложения
               {task.attachments && task.attachments.length > 0 && (
-                <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded ml-1">
+                <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
                   {task.attachments.length}
                 </span>
               )}
@@ -963,7 +1098,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
             <button
               onClick={() => setActiveTab('submission')}
               className={cn(
-                'pb-2 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1 whitespace-nowrap',
+                'pb-3 text-xs uppercase tracking-wider font-bold relative flex items-center gap-1.5 whitespace-nowrap transition-colors',
                 activeTab === 'submission' ? 'text-green-700 border-b-2 border-green-700' : 'text-slate-400 hover:text-slate-600'
               )}
             >
@@ -971,10 +1106,10 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               Выполнение
               {task.submission && (
                 <span className={cn(
-                  'text-[10px] px-1.5 py-0.5 rounded ml-1',
+                  'text-[10px] px-1.5 py-0.5 rounded',
                   task.submission.status === 'approved' ? 'bg-green-100 text-green-700' :
                   task.submission.status === 'rejected' ? 'bg-red-100 text-red-700' :
-                  'bg-yellow-100 text-yellow-700'
+                  'bg-amber-100 text-amber-700'
                 )}>
                   {task.submission.status === 'approved' ? '✓' :
                    task.submission.status === 'rejected' ? '✗' : '?'}
@@ -984,28 +1119,28 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 bg-white custom-scrollbar">
           {activeTab === 'details' && (
-            <div className="space-y-4">
+            <div className="space-y-6">
               
               {isEditingTask ? (
-                <div className="space-y-4 mb-6 bg-slate-50 p-4 rounded-md border border-slate-200">
+                <div className="space-y-4 mb-6 bg-slate-50 p-5 rounded-md border border-slate-200 shadow-sm">
                   <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Описание</label>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Описание</label>
                     <textarea 
                       value={editData.description}
                       onChange={e => setEditData({...editData, description: e.target.value})}
-                      className="w-full text-sm border border-slate-200 rounded-md px-3 py-2 outline-none focus:border-green-600"
+                      className="w-full text-sm font-medium border border-slate-300 rounded-md px-3 py-2 outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-white"
                       rows={4}
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Приоритет</label>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Приоритет</label>
                       <select 
                         value={editData.priority}
                         onChange={e => setEditData({...editData, priority: e.target.value as Priority})}
-                        className="w-full text-sm border border-slate-200 rounded-md px-3 py-2 outline-none focus:border-green-600"
+                        className="w-full text-sm font-bold border border-slate-300 rounded-md px-3 py-2 outline-none focus:border-green-600 bg-white cursor-pointer"
                       >
                         <option value="critical">Критический</option>
                         <option value="high">Высокий</option>
@@ -1014,63 +1149,86 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                       </select>
                     </div>
                     <div>
-                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Дедлайн</label>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Дедлайн</label>
                       <input 
                         type="datetime-local"
                         value={editData.deadline}
                         onChange={e => setEditData({...editData, deadline: e.target.value})}
-                        className="w-full text-sm border border-slate-200 rounded-md px-3 py-2 outline-none focus:border-green-600"
+                        className="w-full text-sm font-bold border border-slate-300 rounded-md px-3 py-2 outline-none focus:border-green-600 bg-white cursor-pointer"
                       />
                     </div>
                   </div>
-                  <div className="flex gap-2 pt-2">
-                    <button onClick={handleSaveEditTask} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-md text-xs font-bold uppercase tracking-wider hover:bg-green-700">
-                      <Save size={14} /> Сохранить
-                    </button>
-                    <button onClick={() => setIsEditingTask(false)} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-md text-xs font-bold uppercase tracking-wider hover:bg-slate-50">
+
+                  <div className="pt-4 border-t border-slate-200">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2.5 block">Подзадачи</label>
+                    <div className="space-y-2 mb-3">
+                      {(editData.subtasks || []).map((st: any) => (
+                        <div key={st.id} className="flex items-center gap-2 bg-white px-3 py-2 border border-slate-200 rounded-md shadow-sm">
+                          <span className={cn('text-sm font-medium flex-1', st.done && 'line-through text-slate-400')}>{st.title}</span>
+                          <button onClick={() => handleRemoveSubtask(st.id)} className="text-slate-400 hover:text-red-600 bg-slate-50 hover:bg-red-50 p-1 rounded transition-colors"><X size={14}/></button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <input 
+                        value={newSubtaskTitle}
+                        onChange={e => setNewSubtaskTitle(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddSubtask(); } }}
+                        placeholder="Добавить пункт..."
+                        className="flex-1 text-sm font-medium border border-slate-300 rounded-md px-3 py-2 outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-white"
+                      />
+                      <button onClick={handleAddSubtask} className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-md font-bold text-xs uppercase tracking-wider transition-colors shadow-sm">Добавить</button>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-4 border-t border-slate-200">
+                    <button onClick={() => setIsEditingTask(false)} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-md text-xs font-bold uppercase tracking-wider hover:bg-slate-50 transition-colors">
                       Отмена
+                    </button>
+                    <button onClick={handleSaveEditTask} className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-md text-xs font-bold uppercase tracking-wider hover:bg-green-700 transition-colors shadow-sm">
+                      <Save size={14} /> Сохранить
                     </button>
                   </div>
                 </div>
               ) : (
-                <p className="text-sm text-slate-600 mb-6">{task.description}</p>
+                <div className="bg-slate-50 p-4 rounded-md border border-slate-100">
+                  <p className="text-sm font-medium text-slate-700 whitespace-pre-wrap leading-relaxed">{task.description || 'Описание отсутствует.'}</p>
+                </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-6">
                 <div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Исполнитель</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Исполнитель</div>
                   
                   {isLeader ? (
-                    <div className="space-y-2">
-                      <select 
-                        disabled={isAssigning}
-                        value={task.assigneeId || ''}
-                        onChange={(e) => handleClaimOrAssign(e.target.value)} 
-                        className="text-sm border border-slate-200 rounded-md px-2 py-1.5 outline-none w-full bg-slate-50 hover:bg-white focus:border-green-600"
-                      >
-                        <option value="">Не назначен (Свободная)</option>
-                        {unitUsers.map(u => (
-                          <option key={u.id} value={u.id.toString()}>
-                            {u.rank} {getAssigneeFullName(u)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    <select 
+                      disabled={isAssigning}
+                      value={task.assigneeId || ''}
+                      onChange={(e) => handleClaimOrAssign(e.target.value)} 
+                      className="text-sm font-bold border border-slate-300 rounded-md px-3 py-2 outline-none w-full bg-slate-50 hover:bg-white focus:border-green-600 cursor-pointer shadow-sm transition-colors"
+                    >
+                      <option value="">Не назначен (Свободная)</option>
+                      {unitUsers.map(u => (
+                        <option key={u.id} value={u.id.toString()}>
+                          {translateRank(u.rank)} {getAssigneeFullName(u)}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
                     <div className="flex flex-col gap-2">
                       {assignee ? (
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded bg-green-600 flex items-center justify-center text-white text-xs font-bold">
+                        <div className="flex items-center gap-3 bg-white p-2 border border-slate-200 rounded-md shadow-sm">
+                          <div className="w-10 h-10 rounded bg-green-600 flex items-center justify-center text-white text-sm font-bold shadow-inner">
                             {getAssigneeInitials(assignee)}
                           </div>
                           <div>
-                            <div className="text-sm font-bold text-slate-700">{getAssigneeFullName(assignee)}</div>
-                            <div className="text-[10px] text-slate-500 uppercase tracking-wider">{assignee.rank}</div>
+                            <div className="text-sm font-bold text-slate-800">{getAssigneeFullName(assignee)}</div>
+                            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{translateRank(assignee.rank)}</div>
                           </div>
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <div className="text-sm text-slate-500 flex items-center gap-2 bg-white p-2 rounded-md border border-dashed border-slate-300">
+                          <div className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2 bg-amber-50 p-3 rounded-md border border-dashed border-amber-300">
                             <AlertTriangle size={16} className="text-amber-500" />
                             Свободная задача
                           </div>
@@ -1078,9 +1236,9 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                              <button 
                                disabled={isAssigning}
                                onClick={() => handleClaimOrAssign(currentUser.id.toString())}
-                               className="w-full text-xs uppercase tracking-wider bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 font-bold flex items-center justify-center gap-2"
+                               className="w-full text-xs uppercase tracking-wider bg-green-600 text-white px-4 py-2.5 rounded-md hover:bg-green-700 font-bold flex items-center justify-center gap-2 shadow-sm transition-colors"
                              >
-                               <UserPlus size={14} /> Взять в работу
+                               <UserPlus size={16} /> Взять в работу
                              </button>
                           )}
                         </div>
@@ -1090,68 +1248,73 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 </div>
 
                 <div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Постановщик</div>
-                  <div className="flex items-center gap-2">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Постановщик</div>
+                  <div className="flex items-center gap-3 bg-white p-2 border border-slate-200 rounded-md shadow-sm">
                     {creator ? (
                       <>
                         <div
-                          className="w-6 h-6 rounded flex items-center justify-center text-white text-[9px] font-bold"
-                          style={{ backgroundColor: `hsl(${parseInt(creator.id.toString()) * 100 % 360}, 40%, 40%)` }}
+                          className="w-10 h-10 rounded flex items-center justify-center text-white text-sm font-bold shadow-inner"
+                          style={{ backgroundColor: `hsl(${parseInt(creator.id.toString()) * 100 % 360}, 50%, 45%)` }}
                         >
                           {getAssigneeInitials(creator)}
                         </div>
-                        <span className="text-sm font-medium text-slate-700">{creator.rank} {getAssigneeFullName(creator)}</span>
+                        <div>
+                          <div className="text-sm font-bold text-slate-800">{getAssigneeFullName(creator)}</div>
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{translateRank(creator.rank)}</div>
+                        </div>
                       </>
-                    ) : <span className="text-sm font-medium text-slate-500">Система</span>}
+                    ) : <span className="text-sm font-bold text-slate-500 p-2">Система</span>}
                   </div>
                 </div>
 
                 <div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Подразделение</div>
-                  <span className="text-sm text-slate-700 font-medium flex items-center gap-1.5">
-                    <Users size={14} className="text-slate-400" />
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Подразделение</div>
+                  <div className="text-sm text-slate-800 font-bold flex items-center gap-2 bg-slate-50 p-3 border border-slate-200 rounded-md shadow-sm">
+                    <Users size={16} className="text-slate-400" />
                     {unit?.name || '—'}
-                  </span>
+                  </div>
                 </div>
 
                 <div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Дедлайн</div>
-                  <span className={cn(
-                    "text-sm font-bold flex items-center gap-1.5",
-                    parsedModalDeadline && parsedModalDeadline < new Date() && task.status !== 'done' ? "text-red-600" : "text-slate-700"
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Дедлайн</div>
+                  <div className={cn(
+                    "text-sm font-bold flex items-center gap-2 p-3 border rounded-md shadow-sm",
+                    parsedModalDeadline && parsedModalDeadline < new Date() && task.status !== 'done' 
+                      ? "bg-red-50 border-red-200 text-red-700" 
+                      : "bg-slate-50 border-slate-200 text-slate-800"
                   )}>
-                    <Calendar size={12} />
+                    <Calendar size={16} />
                     {parsedModalDeadline ? parsedModalDeadline.toLocaleString('ru-RU', {
                       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
                     }) : 'Без срока'}
-                  </span>
+                  </div>
                 </div>
               </div>
 
               {task.tags.length > 0 && (
-                <div className="mt-4">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Метки</div>
-                  <div className="flex flex-wrap gap-1">
+                <div className="pt-2">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Метки</div>
+                  <div className="flex flex-wrap gap-1.5">
                     {task.tags.map(tag => (
-                      <span key={tag} className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded">{tag}</span>
+                      <span key={tag} className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 bg-slate-100 text-slate-600 border border-slate-200 rounded-sm shadow-sm">{tag}</span>
                     ))}
                   </div>
                 </div>
               )}
 
-              {task.subtasks && task.subtasks.length > 0 && (
-                <div className="mt-4">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Подзадачи</div>
-                  <div className="space-y-1.5">
+              {task.subtasks && task.subtasks.length > 0 && !isEditingTask && (
+                <div className="pt-2">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">Подзадачи</div>
+                  <div className="space-y-2 bg-slate-50 p-4 rounded-md border border-slate-200">
                     {task.subtasks.map(st => (
-                      <label key={st.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer">
+                      <label key={st.id} className="flex items-start gap-3 p-2 rounded-md hover:bg-white border border-transparent hover:border-slate-200 hover:shadow-sm cursor-pointer transition-all">
                         <input
                           type="checkbox"
                           checked={st.done}
-                          onChange={async () => {}}
-                          className="rounded border-slate-300 text-green-600 focus:ring-green-600"
+                          onChange={() => handleToggleSubtaskCheckbox(st.id)}
+                          className="mt-0.5 rounded border-slate-300 text-green-600 focus:ring-green-600 w-4 h-4 cursor-pointer"
                         />
-                        <span className={cn('text-sm font-medium', st.done ? 'line-through text-slate-400' : 'text-slate-700')}>{st.title}</span>
+                        <span className={cn('text-sm font-medium leading-tight pt-px', st.done ? 'line-through text-slate-400' : 'text-slate-800')}>{st.title}</span>
                       </label>
                     ))}
                   </div>
@@ -1159,9 +1322,9 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               )}
 
               {allowedStatuses.length > 0 && (
-                <div className="mt-6 border-t border-slate-100 pt-4">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Изменить статус вручную</div>
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="mt-6 border-t border-slate-200 pt-6">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3 text-center">Действия со статусом</div>
+                  <div className="flex flex-wrap justify-center gap-2">
                     {allowedStatuses.map(col => (
                       <button
                         key={col.id}
@@ -1169,10 +1332,10 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                           await api.moveTask(parseInt(task.id), col.id, 0);
                         }}
                         className={cn(
-                          'text-xs uppercase tracking-wider font-bold px-3 py-1.5 rounded-md border',
+                          'text-xs uppercase tracking-wider font-bold px-4 py-2 rounded-md border shadow-sm transition-colors',
                           (task.status === col.id || (task.status === 'planned' && col.id === 'todo'))
-                            ? 'border-green-600 bg-green-50 text-green-800'
-                            : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                            ? 'border-green-600 bg-green-600 text-white'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-400'
                         )}
                       >
                         {col.label}
@@ -1194,7 +1357,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
           {activeTab === 'attachments' && (
             <div className="space-y-4">
-              <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Вложения задачи</h3>
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3">Прикрепленные файлы</h3>
               {renderFileList(task.attachments || [])}
             </div>
           )}
@@ -1206,9 +1369,10 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
           )}
         </div>
 
-        <div className="p-6 pt-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+        <div className="p-5 border-t border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-4">
-            <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <Calendar size={12} />
               Создано: {new Date(task.createdAt).toLocaleDateString('ru-RU')}
             </div>
 
@@ -1218,17 +1382,17 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
                 {task.is_archived ? (
                   <button 
                     onClick={() => onToggleArchive(task.id, false)}
-                    className="text-[10px] font-bold uppercase tracking-wider text-green-600 hover:text-green-800 flex items-center gap-1"
+                    className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-white border border-green-600 text-green-700 rounded hover:bg-green-50 flex items-center gap-1.5 transition-colors shadow-sm"
                   >
-                    <RefreshCw size={12} /> Вернуть из архива
+                    <RefreshCw size={12} /> Вернуть
                   </button>
                 ) : (
                   task.status === 'done' && (
                     <button 
                       onClick={() => onToggleArchive(task.id, true)}
-                      className="text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 flex items-center gap-1"
+                      className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-white border border-slate-300 text-slate-600 rounded hover:bg-slate-100 flex items-center gap-1.5 transition-colors shadow-sm"
                     >
-                      <Archive size={12} /> Убрать в архив
+                      <Archive size={12} /> В архив
                     </button>
                   )
                 )}
@@ -1238,17 +1402,17 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
 
           <div>
             {showConfirmDelete ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Удалить задачу?</span>
+              <div className="flex items-center gap-2 bg-red-50 px-3 py-1.5 rounded-md border border-red-100">
+                <span className="text-[10px] font-bold text-red-600 uppercase tracking-wider mr-2">Удалить безвозвратно?</span>
                 <button
                   onClick={() => onDelete(task.id)}
-                  className="text-xs font-bold uppercase tracking-wider px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+                  className="text-[10px] font-bold uppercase tracking-wider px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 shadow-sm"
                 >
                   Да
                 </button>
                 <button
                   onClick={() => setShowConfirmDelete(false)}
-                  className="text-xs font-bold uppercase tracking-wider px-3 py-1 border border-slate-200 rounded hover:bg-slate-50 bg-white"
+                  className="text-[10px] font-bold uppercase tracking-wider px-3 py-1 bg-white border border-slate-300 text-slate-700 rounded hover:bg-slate-50 shadow-sm"
                 >
                   Нет
                 </button>
@@ -1257,7 +1421,7 @@ function TaskDetailModal({ task, users, units, currentUser, onClose, onUpdate, o
               isLeader && (
                 <button
                   onClick={() => setShowConfirmDelete(true)}
-                  className="text-[10px] font-bold uppercase tracking-wider text-red-400 hover:text-red-600 flex items-center gap-1"
+                  className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-white border border-red-200 text-red-600 rounded hover:bg-red-50 flex items-center gap-1.5 transition-colors shadow-sm"
                 >
                   <Trash2 size={12} /> Удалить
                 </button>
@@ -1371,15 +1535,15 @@ function TaskComments({ taskId, comments, currentUser }: {
           const fileUrl = att.url || att.fileUrl || att.file || '';
           const fileName = att.name || att.filename || 'Файл';
           return (
-            <div key={att.id} className="flex items-center gap-1 bg-slate-50 rounded-md px-2 py-1 border border-slate-200">
+            <div key={att.id} className="flex items-center gap-1 bg-white rounded-md px-2 py-1 border border-slate-200 shadow-sm">
               {fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
                 <Image size={12} className="text-slate-400" />
               ) : (
                 <FileText size={12} className="text-slate-400" />
               )}
-              <span className="text-xs text-slate-600 max-w-[100px] truncate">{fileName}</span>
-              <a href={fileUrl} download={fileName} className="ml-1 p-0.5 hover:bg-slate-200 rounded" target="_blank" rel="noopener noreferrer">
-                <Download size={10} className="text-slate-500" />
+              <span className="text-xs font-bold text-slate-600 max-w-[150px] truncate">{fileName}</span>
+              <a href={fileUrl} download={fileName} className="ml-1 p-1 bg-slate-100 hover:bg-slate-200 rounded transition-colors" target="_blank" rel="noopener noreferrer">
+                <Download size={10} className="text-slate-600" />
               </a>
             </div>
           );
@@ -1389,87 +1553,101 @@ function TaskComments({ taskId, comments, currentUser }: {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-        {comments.map((comment: any) => {
-          const fullName = comment.userFullName || comment.user_full_name || 'Неизвестно';
-          const rank = comment.userRank || comment.user_rank || '';
-          const date = comment.createdAt || comment.created_at;
-          const authorId = comment.userId?.toString() || comment.user?.toString();
-          const initials = fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
+    <div className="flex flex-col h-full space-y-4">
+      <div className="flex-1 space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar p-4 bg-slate-50 rounded-md border border-slate-200">
+        {comments.length === 0 ? (
+          <div className="text-center py-10 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Нет комментариев. Будьте первым!
+          </div>
+        ) : (
+          comments.map((comment: any) => {
+            const fullName = comment.userFullName || comment.user_full_name || 'Неизвестный сотрудник';
+            const rank = comment.userRank || comment.user_rank || '';
+            const date = comment.createdAt || comment.created_at;
+            const authorId = comment.userId?.toString() || comment.user?.toString();
+            const initials = fullName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2);
+            
+            const isMe = authorId === currentUser?.id?.toString();
 
-          return (
-            <div key={comment.id} className="group relative">
-              <div className="flex gap-3">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 rounded bg-slate-200 flex items-center justify-center text-slate-700 font-bold text-xs">
+            return (
+              <div key={comment.id} className={cn("group flex gap-3", isMe ? "flex-row-reverse" : "flex-row")}>
+                <div className="flex-shrink-0 mt-1">
+                  <div className={cn(
+                    "w-8 h-8 rounded flex items-center justify-center text-white font-bold text-xs shadow-sm",
+                    isMe ? "bg-green-600" : "bg-slate-700"
+                  )}>
                     {initials}
                   </div>
                 </div>
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-bold text-slate-800">
-                      {rank} {fullName}
+                <div className={cn("flex flex-col max-w-[80%]", isMe ? "items-end" : "items-start")}>
+                  <div className={cn("flex items-center gap-2 mb-1", isMe ? "flex-row-reverse" : "flex-row")}>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      {translateRank(rank)} {fullName}
                     </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 bg-white border border-slate-200 px-1.5 py-0.5 rounded-sm">
                       {formatDate(date)}
                     </span>
                   </div>
 
                   {editingCommentId === comment.id ? (
-                    <div className="space-y-2">
+                    <div className="space-y-2 w-full bg-white p-3 rounded-md border border-green-600 shadow-sm">
                       <textarea
                         value={editText}
                         onChange={(e) => setEditText(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-600"
-                        rows={2}
+                        className="w-full text-sm font-medium border-none outline-none resize-none"
+                        rows={3}
                         autoFocus
                       />
-                      <div className="flex gap-2">
-                        <button onClick={saveEdit} className="text-xs font-bold uppercase tracking-wider px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700">Сохранить</button>
-                        <button onClick={cancelEdit} className="text-xs font-bold uppercase tracking-wider px-3 py-1.5 border border-slate-200 rounded hover:bg-slate-50">Отмена</button>
+                      <div className="flex gap-2 justify-end pt-2 border-t border-slate-100">
+                        <button onClick={cancelEdit} className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-slate-100 text-slate-600 rounded-sm hover:bg-slate-200 transition-colors">Отмена</button>
+                        <button onClick={saveEdit} className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-green-600 text-white rounded-sm hover:bg-green-700 transition-colors shadow-sm">Сохранить</button>
                       </div>
                     </div>
                   ) : (
-                    <>
-                      <p className="text-sm text-slate-700 whitespace-pre-wrap">{comment.text}</p>
-                      {comment.attachments && comment.attachments.length > 0 && renderFileList(comment.attachments)}
-                    </>
+                    <div className="relative group">
+                      <div className={cn(
+                        "p-3 rounded-md text-sm font-medium shadow-sm relative",
+                        isMe ? "bg-green-50 border border-green-200 text-green-900 rounded-tr-none" : "bg-white border border-slate-200 text-slate-800 rounded-tl-none"
+                      )}>
+                        <p className="whitespace-pre-wrap leading-relaxed">{comment.text}</p>
+                        {comment.attachments && comment.attachments.length > 0 && renderFileList(comment.attachments)}
+                      </div>
+
+                      {isMe && !editingCommentId && (
+                        <div className="absolute top-1/2 -translate-y-1/2 -left-16 opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity bg-white p-1 rounded-md border border-slate-200 shadow-sm">
+                          <button onClick={() => startEditing(comment)} className="p-1 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors" title="Редактировать">
+                            <Edit2 size={12} />
+                          </button>
+                          <button onClick={() => handleDelete(comment.id)} className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="Удалить">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
-
-                {authorId === currentUser?.id?.toString() && !editingCommentId && (
-                  <div className="opacity-0 group-hover:opacity-100 flex gap-1">
-                    <button onClick={() => startEditing(comment)} className="p-1 text-slate-400 hover:text-green-600 rounded">
-                      <Edit2 size={12} />
-                    </button>
-                    <button onClick={() => handleDelete(comment.id)} className="p-1 text-slate-400 hover:text-red-600 rounded">
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
         <div ref={commentsEndRef} />
       </div>
 
-      <div className="relative">
+      <div className="relative bg-white border border-slate-200 rounded-md p-3 shadow-sm">
         {attachments.length > 0 && (
           <div className="mb-3 p-3 bg-slate-50 rounded-md border border-slate-200">
-            <div className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-2">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-2">
               <Paperclip size={12} />
               Прикреплённые файлы:
             </div>
             <div className="flex flex-wrap gap-2">
               {attachments.map((file, index) => (
-                <div key={index} className="flex items-center gap-1 bg-white rounded-md px-2 py-1 border border-slate-200">
-                  {file.type.startsWith('image/') ? <Image size={12} className="text-slate-400" /> : <FileText size={12} className="text-slate-400" />}
-                  <span className="text-xs text-slate-600 max-w-[150px] truncate">{file.name}</span>
-                  <button onClick={() => removeAttachment(index)} className="ml-1 p-0.5 hover:bg-slate-100 rounded">
-                    <X size={10} className="text-slate-500" />
+                <div key={index} className="flex items-center gap-1.5 bg-white rounded-md px-2 py-1.5 border border-slate-200 shadow-sm">
+                  {file.type.startsWith('image/') ? <Image size={14} className="text-blue-500" /> : <FileText size={14} className="text-slate-500" />}
+                  <span className="text-xs font-bold text-slate-700 max-w-[150px] truncate">{file.name}</span>
+                  <button onClick={() => removeAttachment(index)} className="ml-1 p-1 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded transition-colors">
+                    <X size={10} />
                   </button>
                 </div>
               ))}
@@ -1482,39 +1660,40 @@ function TaskComments({ taskId, comments, currentUser }: {
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
             onKeyDown={handleKeyPress}
-            placeholder="Напишите комментарий..."
-            className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-600 resize-none min-h-[80px]"
+            placeholder="Написать сообщение..."
+            className="flex-1 px-3 py-2 text-sm font-medium border-none outline-none resize-none min-h-[44px] max-h-[150px] bg-transparent"
           />
 
-          <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 pr-1 pb-1">
             <div className="relative">
-              <button onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="p-2 text-slate-400 hover:text-green-600 hover:bg-slate-50 rounded-md">
+              <button onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Прикрепить файл">
                 <Paperclip size={18} />
               </button>
 
               {showAttachmentMenu && (
-                <div className="absolute bottom-full right-0 mb-1 bg-white rounded-md shadow-lg border border-slate-200 py-1 min-w-[150px] z-10">
-                  <button onClick={() => fileInputRef.current?.click()} className="w-full px-3 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                    <FileText size={14} /> Документ
+                <div className="absolute bottom-full right-0 mb-2 bg-white rounded-md shadow-xl border border-slate-200 py-1 min-w-[150px] z-10">
+                  <button onClick={() => fileInputRef.current?.click()} className="w-full px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2 transition-colors">
+                    <FileText size={14} className="text-slate-400" /> Документ
                   </button>
-                  <button onClick={() => { if (fileInputRef.current) { fileInputRef.current.accept = 'image/*'; fileInputRef.current.click(); } }} className="w-full px-3 py-2 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                    <Image size={14} /> Изображение
+                  <button onClick={() => { if (fileInputRef.current) { fileInputRef.current.accept = 'image/*'; fileInputRef.current.click(); } }} className="w-full px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2 transition-colors border-t border-slate-100">
+                    <Image size={14} className="text-slate-400" /> Изображение
                   </button>
                 </div>
               )}
             </div>
 
-            <button onClick={handleSendComment} disabled={isSending || (!newComment.trim() && attachments.length === 0)} className="p-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50">
-              <Send size={18} />
+            <button 
+              onClick={handleSendComment} 
+              disabled={isSending || (!newComment.trim() && attachments.length === 0)} 
+              className="p-2.5 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors shadow-sm"
+              title="Отправить (Enter)"
+            >
+              <Send size={16} className={cn("translate-x-0.5", isSending && "animate-pulse")} />
             </button>
           </div>
         </div>
 
         <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" multiple />
-      </div>
-
-      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        Enter для отправки • Shift+Enter для новой строки
       </div>
     </div>
   );
@@ -1598,52 +1777,75 @@ function TaskSubmission({ task }: { task: Task }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-        <CheckCircle size={18} className="text-slate-600" />
-        <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800">Результаты работы</h3>
+      <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+        <div className="p-1.5 bg-slate-100 rounded text-slate-600">
+          <CheckCircle size={16} />
+        </div>
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800">Результаты работы</h3>
       </div>
 
       {task.submission && (
         <div className={cn(
-          'p-4 rounded-md border-l-4',
-          task.submission.status === 'approved' ? 'bg-green-50 border-green-500' :
-          task.submission.status === 'rejected' ? 'bg-red-50 border-red-500' :
-          'bg-amber-50 border-amber-500'
+          'p-5 rounded-md border shadow-sm relative overflow-hidden',
+          task.submission.status === 'approved' ? 'bg-green-50 border-green-200' :
+          task.submission.status === 'rejected' ? 'bg-red-50 border-red-200' :
+          'bg-amber-50 border-amber-200'
         )}>
-          <div className="flex items-center justify-between mb-3">
-             <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий статус отчета</span>
-             <span className="text-xs font-bold uppercase tracking-wider px-2 py-1 rounded bg-white border border-slate-200 shadow-sm">
-               {task.submission.status === 'approved' ? '✅ Принят' :
-                task.submission.status === 'rejected' ? '❌ Возвращен' : '⏳ Ожидает проверки'}
+          {/* Декоративная полоска слева */}
+          <div className={cn(
+            "absolute left-0 top-0 bottom-0 w-1",
+            task.submission.status === 'approved' ? 'bg-green-500' :
+            task.submission.status === 'rejected' ? 'bg-red-500' : 'bg-amber-500'
+          )} />
+
+          <div className="flex items-center justify-between mb-4">
+             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Статус отчета</span>
+             <span className={cn(
+               "text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-sm border shadow-sm flex items-center gap-1.5",
+               task.submission.status === 'approved' ? 'bg-green-600 text-white border-green-700' :
+               task.submission.status === 'rejected' ? 'bg-red-600 text-white border-red-700' : 'bg-amber-500 text-white border-amber-600'
+             )}>
+               {task.submission.status === 'approved' ? <><CheckCircle size={12}/> Принят</> :
+                task.submission.status === 'rejected' ? <><X size={12}/> Возвращен</> : <><Clock size={12}/> На проверке</>}
              </span>
           </div>
 
-          <p className="text-sm font-medium text-slate-700 bg-white/70 p-3 rounded-md mb-3 border border-white">
-            {task.submission.comment || 'Без комментария'}
-          </p>
+          <div className="bg-white p-4 rounded-md border border-slate-200 shadow-sm mb-4">
+            <h4 className="text-[9px] font-bold uppercase tracking-wider text-slate-400 mb-2">Комментарий исполнителя:</h4>
+            <p className="text-sm font-medium text-slate-700 whitespace-pre-wrap leading-relaxed">
+              {task.submission.comment || <span className="italic text-slate-400">Без комментария</span>}
+            </p>
+          </div>
 
           {task.submission.files && task.submission.files.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {task.submission.files.map((f: any) => (
-                <a key={f.id} href={f.file || f.fileUrl} target="_blank" className="flex items-center gap-2 p-2 bg-white rounded-md border border-slate-200 hover:border-slate-400">
-                  <FileText size={14} className="text-slate-500" />
-                  <span className="text-xs font-bold uppercase tracking-wider truncate flex-1">{f.filename || f.fileName || 'Документ'}</span>
-                  <Download size={12} className="text-slate-400" />
-                </a>
-              ))}
+            <div className="mb-4">
+              <h4 className="text-[9px] font-bold uppercase tracking-wider text-slate-400 mb-2">Приложенные материалы:</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {task.submission.files.map((f: any) => (
+                  <a key={f.id} href={f.file || f.fileUrl} target="_blank" className="flex items-center gap-2 p-2 bg-white rounded-md border border-slate-200 hover:border-blue-300 hover:shadow-sm transition-all group">
+                    <div className="p-1.5 bg-slate-50 rounded text-slate-400 group-hover:text-blue-500 group-hover:bg-blue-50 transition-colors">
+                      <FileText size={14} />
+                    </div>
+                    <span className="text-xs font-bold text-slate-700 truncate flex-1">{f.filename || f.fileName || 'Документ'}</span>
+                    <Download size={14} className="text-slate-300 group-hover:text-blue-600 transition-colors" />
+                  </a>
+                ))}
+              </div>
             </div>
           )}
 
           {task.submission.reviewComment && (
-            <div className="mt-3 p-3 bg-white border border-slate-200 rounded-md text-sm shadow-sm">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-700 block mb-1">Вердикт проверяющего:</span>
-              <p className="text-slate-600 font-medium">{task.submission.reviewComment}</p>
+            <div className="mt-4 p-4 bg-white border-l-4 border-l-purple-500 border-y border-r border-slate-200 rounded-r-md shadow-sm">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-purple-600 flex items-center gap-1 mb-2">
+                <AlertTriangle size={10} /> Вердикт проверяющего:
+              </span>
+              <p className="text-slate-700 font-medium text-sm whitespace-pre-wrap leading-relaxed">{task.submission.reviewComment}</p>
             </div>
           )}
           
           {isAssignee && task.status === 'review' && (
-             <div className="mt-4 pt-4 border-t border-amber-200">
-               <button onClick={handleWithdraw} disabled={submitting} className="w-full py-2 bg-white border border-amber-300 text-amber-700 rounded-md hover:bg-amber-100 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2">
+             <div className="mt-5 pt-4 border-t border-amber-200 border-dashed flex justify-end">
+               <button onClick={handleWithdraw} disabled={submitting} className="px-6 py-2 bg-white border border-amber-300 text-amber-700 rounded-md hover:bg-amber-50 text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 transition-colors shadow-sm disabled:opacity-50">
                  <RefreshCw size={14} /> Отозвать с проверки
                </button>
              </div>
@@ -1652,54 +1854,97 @@ function TaskSubmission({ task }: { task: Task }) {
       )}
 
       {canSubmit && (
-        <div className="bg-slate-50 p-5 rounded-md border border-slate-200">
-          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Прикрепить документы</label>
-          <div className="flex gap-2 mb-4">
-             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-md hover:bg-slate-100 text-xs font-bold uppercase tracking-wider">
-               <Upload size={14} /> Выбрать файлы
-             </button>
-             <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" multiple />
+        <div className="bg-white p-6 rounded-md border border-slate-200 shadow-sm relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-green-500" />
+          
+          <h3 className="text-xs font-bold uppercase tracking-widest text-slate-800 mb-5 flex items-center gap-2">
+            <Upload size={16} className="text-blue-500" />
+            Сдать работу
+          </h3>
+
+          <div className="bg-slate-50 p-4 rounded-md border border-slate-200 border-dashed mb-5">
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Прикрепить документы (обязательно)</label>
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded hover:bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-700 shadow-sm transition-colors">
+                <Plus size={12} /> Выбрать файлы
+              </button>
+            </div>
+            <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" multiple />
+
+            {files.length > 0 ? (
+              <div className="space-y-1.5">
+                {files.map((f, i) => (
+                  <div key={i} className="flex items-center justify-between p-2 bg-white rounded border border-slate-200 shadow-sm">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <FileText size={14} className="text-blue-500 shrink-0" />
+                      <span className="text-xs font-bold text-slate-700 truncate">{f.name}</span>
+                    </div>
+                    <button onClick={() => removeFile(i)} className="text-slate-400 hover:bg-red-50 hover:text-red-600 p-1.5 rounded transition-colors"><X size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-6 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Файлы не выбраны
+              </div>
+            )}
           </div>
 
-          {files.length > 0 && (
-            <div className="mb-4 space-y-1">
-              {files.map((f, i) => (
-                <div key={i} className="flex items-center justify-between p-2 bg-white rounded-md text-xs font-bold uppercase tracking-wider border border-slate-200">
-                  <span className="truncate pr-4">{f.name}</span>
-                  <button onClick={() => removeFile(i)} className="text-red-500 hover:bg-red-50 p-1 rounded"><X size={14} /></button>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="mb-5">
+             <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Комментарий (необязательно)</label>
+             <textarea
+               value={comment}
+               onChange={(e) => setComment(e.target.value)}
+               placeholder="Напишите краткий комментарий к выполненной работе..."
+               className="w-full p-3 text-sm font-medium border border-slate-300 rounded-md focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none h-24 bg-slate-50 focus:bg-white transition-colors resize-none"
+             />
+          </div>
 
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Напишите краткий комментарий к выполненной работе..."
-            className="w-full p-3 text-sm border border-slate-200 rounded-md focus:border-green-500 outline-none h-24 mb-4"
-          />
-
-          <button onClick={handleSubmit} disabled={submitting || (files.length === 0 && !comment.trim())} className="w-full py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2">
-            {submitting ? 'Отправка...' : <><Send size={14} /> Сдать задание</>}
+          <button 
+            onClick={handleSubmit} 
+            disabled={submitting || files.length === 0} 
+            className="w-full py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm transition-colors"
+          >
+            {submitting ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
+            {submitting ? 'Отправка...' : 'Отправить на проверку'}
           </button>
         </div>
       )}
 
       {canReview && (
-        <div className="bg-slate-50 p-5 rounded-md border border-slate-200">
-          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 text-center">Проверка выполнения</label>
-          <textarea
-            value={reviewComment}
-            onChange={(e) => setReviewComment(e.target.value)}
-            placeholder="Ваш вердикт или замечания для доработки..."
-            className="w-full p-3 text-sm border border-slate-300 rounded-md focus:border-green-600 outline-none h-24 mb-4"
-          />
-          <div className="flex gap-3">
-            <button onClick={() => handleReviewAction(true)} disabled={submitting} className="flex-1 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2">
-              <CheckCircle size={14} /> Принять
+        <div className="bg-slate-800 p-6 rounded-md shadow-lg relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-white opacity-5 rounded-full -mr-10 -mt-10 blur-2xl pointer-events-none" />
+          
+          <h3 className="text-xs font-bold uppercase tracking-widest text-white mb-5 flex items-center gap-2">
+            <Shield size={16} className="text-amber-400" />
+            Проверка выполнения
+          </h3>
+          
+          <div className="mb-5">
+            <label className="text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1.5 block">Вердикт или замечания (обязательно для доработки)</label>
+            <textarea
+              value={reviewComment}
+              onChange={(e) => setReviewComment(e.target.value)}
+              placeholder="Напишите ваш комментарий..."
+              className="w-full p-3 text-sm font-medium bg-slate-900 border border-slate-700 text-white rounded-md focus:border-amber-500 outline-none h-24 resize-none transition-colors placeholder:text-slate-600"
+            />
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button 
+              onClick={() => handleReviewAction(true)} 
+              disabled={submitting} 
+              className="flex-1 py-3 bg-emerald-600 text-white rounded-md hover:bg-emerald-500 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors shadow-sm disabled:opacity-50"
+            >
+              <CheckCircle size={16} /> Принять работу
             </button>
-            <button onClick={() => handleReviewAction(false)} disabled={submitting || !reviewComment.trim()} className="flex-1 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-50" title="Для возврата нужен комментарий">
-              <X size={14} /> Доработка
+            <button 
+              onClick={() => handleReviewAction(false)} 
+              disabled={submitting || !reviewComment.trim()} 
+              className="flex-1 py-3 bg-slate-700 border border-slate-600 text-white rounded-md hover:bg-red-600 hover:border-red-600 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-50 transition-colors shadow-sm"
+              title={!reviewComment.trim() ? "Напишите замечания для возврата" : ""}
+            >
+              <X size={16} /> Вернуть на доработку
             </button>
           </div>
         </div>
@@ -1731,6 +1976,9 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
   const [tagsInput, setTagsInput] = useState('');
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  
+  const [subtasks, setSubtasks] = useState<{id: string, title: string, done: boolean}[]>([]);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
 
   const filteredUsers = selectedUnitId
     ? users.filter(u => u.org_unit?.toString() === selectedUnitId)
@@ -1758,6 +2006,12 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
     setAttachmentFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleAddSubtask = () => {
+    if (!newSubtaskTitle.trim()) return;
+    setSubtasks(prev => [...prev, { id: Date.now().toString(), title: newSubtaskTitle, done: false }]);
+    setNewSubtaskTitle('');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !selectedUnitId) return;
@@ -1774,7 +2028,7 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
         unitId: selectedUnitId,
         deadline,
         tags: tagsInput.split(',').map(t => t.trim()).filter(Boolean),
-        subtasks: [],
+        subtasks,
       }, attachmentFiles);
     } catch (error) {
       console.error('Failed to create task:', error);
@@ -1790,59 +2044,77 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-md w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <form onSubmit={handleSubmit} className="p-6">
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800">Новая задача</h2>
-            <button type="button" onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600">
-              <X size={20} />
-            </button>
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={onClose}>
+      <div className="bg-white rounded-md w-full max-w-lg max-h-[95vh] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 bg-slate-50 flex-shrink-0">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800 flex items-center gap-2">
+            <Plus size={16} className="text-green-600" /> Новая задача
+          </h2>
+          <button type="button" onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200 rounded transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-5">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Название *</label>
+            <input
+              type="text"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              className="w-full px-3 py-2 text-sm font-medium border border-slate-300 rounded-md focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm"
+              placeholder="Введите название задачи"
+              required
+            />
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Название *</label>
-              <input
-                type="text"
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
-                placeholder="Введите название задачи"
-                required
-              />
-            </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Описание</label>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 text-sm font-medium border border-slate-300 rounded-md focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm resize-none"
+              placeholder="Подробное описание задачи..."
+            />
+          </div>
 
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Описание</label>
-              <textarea
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500 resize-none"
-                placeholder="Описание задачи"
-              />
-            </div>
-
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Приоритет</label>
-              <select value={priority} onChange={e => setPriority(e.target.value as Priority)} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500">
-                <option value="critical">Критический</option>
-                <option value="high">Высокий</option>
-                <option value="medium">Средний</option>
-                <option value="low">Низкий</option>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Приоритет</label>
+              <select 
+                value={priority} 
+                onChange={e => setPriority(e.target.value as Priority)} 
+                className="w-full px-3 py-2 text-sm font-bold border border-slate-300 rounded-md focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm cursor-pointer"
+              >
+                <option value="critical" className="text-red-600 font-bold">Критический</option>
+                <option value="high" className="text-orange-600 font-bold">Высокий</option>
+                <option value="medium" className="text-amber-600 font-bold">Средний</option>
+                <option value="low" className="text-blue-600 font-bold">Низкий</option>
               </select>
             </div>
 
             <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Подразделение *</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Дедлайн</label>
+              <input
+                type="datetime-local"
+                value={deadline}
+                onChange={e => setDeadline(e.target.value)}
+                className="w-full px-3 py-2 text-sm font-bold border border-slate-300 rounded-md focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm cursor-pointer"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Подразделение *</label>
               <select
                 value={selectedUnitId}
                 onChange={e => handleUnitChange(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
+                className="w-full px-3 py-2 text-sm font-bold border border-slate-300 rounded-md focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm cursor-pointer"
                 required
               >
-                <option value="">Выберите подразделение</option>
+                <option value="">Выберите...</option>
                 {units.map((u: any) => (
                   <option key={u.id} value={u.id.toString()}>{u.name}</option>
                 ))}
@@ -1850,81 +2122,94 @@ function AddTaskModal({ onClose, onAdd, users, units }: {
             </div>
 
             <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Исполнитель (необязательно)</label>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Исполнитель</label>
               <select
                 value={selectedUserId}
                 onChange={e => handleUserChange(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
+                className="w-full px-3 py-2 text-sm font-bold border border-slate-300 rounded-md focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:bg-slate-100"
                 disabled={!selectedUnitId}
               >
-                <option value="">Не назначен (задача на подразделение)</option>
+                <option value="">Не назначен (свободная)</option>
                 {filteredUsers.map(u => (
                   <option key={u.id} value={u.id.toString()}>
-                    {u.rank} {u.fullName || `${(u as any).last_name || ''} ${(u as any).first_name || ''}`.trim()}
+                    {translateRank(u.rank)} {getSafeFullName(u)}
                   </option>
                 ))}
               </select>
             </div>
+          </div>
 
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Вложения</label>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => document.getElementById('task-attachments')?.click()}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 rounded-md hover:bg-slate-50"
-                >
-                  <Upload size={14} /> Выбрать файлы
-                </button>
-                <input id="task-attachments" type="file" onChange={handleAttachmentSelect} className="hidden" multiple />
-              </div>
-              {attachmentFiles.length > 0 && (
-                <div className="mt-2 space-y-2">
-                  {attachmentFiles.map((file, index) => (
-                    <div key={index} className="flex items-center gap-2 p-2 bg-slate-50 rounded-md">
-                      {file.type?.startsWith('image/') ? <Image size={16} className="text-slate-400" /> : <FileText size={16} className="text-slate-400" />}
-                      <span className="text-sm text-slate-600 flex-1 truncate">{file.name}</span>
-                      <span className="text-xs text-slate-400">{formatFileSize(file.size)}</span>
-                      <button type="button" onClick={() => removeAttachmentFile(index)} className="p-1 hover:bg-slate-200 rounded">
-                        <X size={14} className="text-slate-500" />
-                      </button>
-                    </div>
-                  ))}
+          <div className="pt-4 border-t border-slate-100">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 block">Подзадачи</label>
+            <div className="space-y-2 mb-3">
+              {subtasks.map((st, i) => (
+                <div key={i} className="flex items-center gap-2 bg-white px-3 py-2 border border-slate-200 rounded-md shadow-sm">
+                  <span className="flex-1 text-sm font-medium">{st.title}</span>
+                  <button type="button" onClick={() => setSubtasks(s => s.filter((_, idx) => idx !== i))} className="text-slate-400 hover:text-red-600 bg-slate-50 hover:bg-red-50 p-1 rounded transition-colors"><X size={14}/></button>
                 </div>
-              )}
+              ))}
             </div>
-
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Дедлайн</label>
-              <input
-                type="datetime-local"
-                value={deadline}
-                onChange={e => setDeadline(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
+            <div className="flex gap-2">
+              <input 
+                value={newSubtaskTitle}
+                onChange={e => setNewSubtaskTitle(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddSubtask(); } }}
+                placeholder="Новый пункт..."
+                className="flex-1 text-sm font-medium border border-slate-300 rounded-md px-3 py-2 outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm"
               />
-            </div>
-
-            <div>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">Метки (через запятую)</label>
-              <input
-                type="text"
-                value={tagsInput}
-                onChange={e => setTagsInput(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-green-500"
-                placeholder="план, отчет"
-              />
+              <button type="button" onClick={handleAddSubtask} className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-md font-bold text-xs uppercase tracking-wider transition-colors shadow-sm">Добавить</button>
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 mt-6">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 rounded-md hover:bg-slate-50">
-              Отмена
-            </button>
-            <button type="submit" disabled={submitting} className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
-              {submitting ? 'Создание...' : 'Создать'}
-            </button>
+          <div className="pt-4 border-t border-slate-100">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 block">Вложения</label>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => document.getElementById('task-attachments')?.click()}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-300 rounded-md hover:bg-slate-50 text-slate-700 transition-colors shadow-sm"
+              >
+                <Upload size={14} /> Выбрать файлы
+              </button>
+              <input id="task-attachments" type="file" onChange={handleAttachmentSelect} className="hidden" multiple />
+            </div>
+            {attachmentFiles.length > 0 && (
+              <div className="mt-3 space-y-2 bg-slate-50 p-3 rounded-md border border-slate-200">
+                {attachmentFiles.map((file, index) => (
+                  <div key={index} className="flex items-center gap-3 p-2 bg-white rounded-md border border-slate-200 shadow-sm">
+                    {file.type?.startsWith('image/') ? <Image size={16} className="text-blue-500" /> : <FileText size={16} className="text-slate-500" />}
+                    <span className="text-xs font-bold text-slate-700 flex-1 truncate">{file.name}</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-100 px-1.5 py-0.5 rounded">{formatFileSize(file.size)}</span>
+                    <button type="button" onClick={() => removeAttachmentFile(index)} className="p-1.5 hover:bg-red-50 hover:text-red-600 rounded transition-colors text-slate-400">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="pt-4 border-t border-slate-100">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 block">Метки (через запятую)</label>
+            <input
+              type="text"
+              value={tagsInput}
+              onChange={e => setTagsInput(e.target.value)}
+              className="w-full px-3 py-2 text-sm font-medium border border-slate-300 rounded-md focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 bg-slate-50 focus:bg-white transition-colors shadow-sm"
+              placeholder="план, отчет, срочно"
+            />
           </div>
         </form>
+
+        <div className="p-5 border-t border-slate-200 bg-slate-50 flex justify-end gap-3 flex-shrink-0">
+          <button type="button" onClick={onClose} className="px-6 py-2.5 text-xs font-bold uppercase tracking-wider border border-slate-300 rounded-md text-slate-700 hover:bg-white transition-colors shadow-sm">
+            Отмена
+          </button>
+          <button type="submit" onClick={handleSubmit} disabled={submitting} className="px-6 py-2.5 text-xs font-bold uppercase tracking-wider bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-colors shadow-sm">
+            {submitting ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+            {submitting ? 'Сохранение...' : 'Создать задачу'}
+          </button>
+        </div>
       </div>
     </div>
   );

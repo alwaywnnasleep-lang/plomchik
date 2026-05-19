@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Calendar as BigCalendar, dateFnsLocalizer, Views } from 'react-big-calendar';
+import { useSearchParams } from 'react-router-dom';
+import { Calendar as BigCalendar, dateFnsLocalizer, Views, View } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { ru } from 'date-fns/locale/ru';
 import { 
@@ -96,8 +97,54 @@ const CustomToolbar = (toolbar: any) => {
 };
 
 export function CalendarBoard({ tasks = [], onTaskUpdate, onTaskAdd, onTaskDelete }: CalendarBoardProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [filterType, setFilterType] = useState<string>('all');
   const [modalConfig, setModalConfig] = useState<{ isOpen: boolean; mode: 'add' | 'edit'; task?: Task; defaultDate?: Date } | null>(null);
+
+  const currentDate = useMemo(() => {
+    const d = searchParams.get('date');
+    if (!d) return new Date();
+    const parsed = new Date(d);
+    return isNaN(parsed.getTime()) ? new Date() : parsed;
+  }, [searchParams]);
+
+  const currentView: View = (searchParams.get('calView') as View) || Views.MONTH;
+
+  // ИСПРАВЛЕНИЕ: Слушаем URL и автоматически открываем модалку, если есть taskId
+  useEffect(() => {
+    const taskId = searchParams.get('taskId');
+    if (taskId && tasks.length > 0) {
+      const taskToOpen = tasks.find(t => String(t.id) === taskId);
+      if (taskToOpen && !modalConfig?.isOpen) {
+        setModalConfig({ isOpen: true, mode: 'edit', task: taskToOpen });
+      }
+    }
+  }, [searchParams, tasks]);
+
+  // Функция для закрытия модалки и ОЧИСТКИ URL от taskId
+  const handleCloseModal = () => {
+    setModalConfig(null);
+    if (searchParams.has('taskId')) {
+      setSearchParams(prev => {
+        prev.delete('taskId');
+        return prev;
+      });
+    }
+  };
+
+  const handleNavigate = (newDate: Date) => {
+    setSearchParams(prev => {
+      prev.set('date', newDate.toISOString());
+      return prev;
+    });
+  };
+
+  const handleViewChange = (newView: View) => {
+    setSearchParams(prev => {
+      prev.set('calView', newView);
+      return prev;
+    });
+  };
 
   const getEventType = (task: Task) => {
     const rawTags: any = task.tags || []; 
@@ -198,7 +245,8 @@ export function CalendarBoard({ tasks = [], onTaskUpdate, onTaskAdd, onTaskDelet
     } else if (mode === 'edit' && taskId && onTaskUpdate) {
       onTaskUpdate(taskId, data);
     }
-    setModalConfig(null);
+    // Используем новую функцию закрытия, чтобы почистить URL
+    handleCloseModal();
   };
 
   return (
@@ -296,7 +344,10 @@ export function CalendarBoard({ tasks = [], onTaskUpdate, onTaskAdd, onTaskDelet
           events={events}
           startAccessor="start"
           endAccessor="end"
-          defaultView={Views.MONTH}
+          date={currentDate}
+          onNavigate={handleNavigate}
+          view={currentView}
+          onView={handleViewChange}
           views={['month', 'week', 'day', 'agenda']}
           style={{ height: '100%' }}
           eventPropGetter={eventStyleGetter}
@@ -320,7 +371,7 @@ export function CalendarBoard({ tasks = [], onTaskUpdate, onTaskAdd, onTaskDelet
 
       <CalendarEventModal 
         config={modalConfig} 
-        onClose={() => setModalConfig(null)} 
+        onClose={handleCloseModal} // ИСПРАВЛЕНИЕ: закрываем и чистим URL
         onSave={handleSaveModal} 
         onDelete={onTaskDelete}
       />
@@ -346,7 +397,6 @@ function CalendarEventModal({
   const [type, setType] = useState<'task' | 'event'>('task');
   const [dateStr, setDateStr] = useState('');
   
-  // Стейты для кастомного напоминания
   const [hasReminder, setHasReminder] = useState(false);
   const [reminderDate, setReminderDate] = useState('');
 
@@ -361,13 +411,11 @@ function CalendarEventModal({
       
       const pad = (n: number) => n.toString().padStart(2, '0');
       
-      // Заполняем дедлайн
       const d = isEdit && config.task ? parseSafeDate(config.task.deadline || config.task.start_date || config.task.createdAt) : config.defaultDate;
       if (d) {
         setDateStr(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
       }
 
-      // Заполняем напоминание, если оно было
       const existingReminder = (config.task as any)?.reminder_time;
       if (existingReminder) {
         const rd = new Date(existingReminder);
@@ -388,7 +436,7 @@ function CalendarEventModal({
       title,
       deadline: dateStr,
       start_date: dateStr, 
-      reminder_time: hasReminder && reminderDate ? reminderDate : null // Сохраняем точное время напоминания (или null)
+      reminder_time: hasReminder && reminderDate ? reminderDate : null 
     };
     
     if (!isEdit) {
@@ -461,7 +509,6 @@ function CalendarEventModal({
             />
           </div>
 
-          {/* НОВЫЙ БЛОК НАПОМИНАНИЯ (Доступен всегда) */}
           <div className="pt-2 border-t border-slate-100">
             <label className="flex items-center gap-2 mb-2 cursor-pointer w-max">
               <input 
