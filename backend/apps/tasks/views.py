@@ -2,6 +2,7 @@ from rest_framework import generics, status, filters
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework import permissions
+
 from rest_framework.views import APIView
 from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
@@ -46,14 +47,17 @@ class TaskListCreateView(generics.ListCreateAPIView):
             'assigned_to', 'created_by', 'org_unit',
         ).prefetch_related('subtasks', 'attachments', 'comments')
         
+        # Глобальные задачи видны всем аутентифицированным
+        global_q = Q(is_global=True)
+        
         if user.role in ('commander', 'deputy_commander'):
-            return qs
-
-        visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
-        if hasattr(user, 'org_unit_id') and user.org_unit_id:
-            visibility_q |= Q(org_unit_id=user.org_unit_id)
-
-        return qs.filter(visibility_q).distinct()
+            return qs   # командиры видят все неархивные задачи
+        else:
+            visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
+            if hasattr(user, 'org_unit_id') and user.org_unit_id:
+                visibility_q |= Q(org_unit_id=user.org_unit_id)
+            visibility_q |= global_q
+            return qs.filter(visibility_q).distinct()
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -156,22 +160,42 @@ class TaskAttachmentUploadView(APIView):
 class KanbanBoardView(APIView):
     def get(self, request):
         user = request.user
-        unit_ids = get_units_under_authority(user)
+        if not user.is_authenticated:
+            return Response({'error': 'Not authenticated'}, status=401)
 
-        # ФИКС: Скрываем архивные задачи с доски
-        qs = Task.objects.filter(
-            parent_task__isnull=True,
-            is_archived=False
-        ).select_related(
+        # Если пользователь — командир или заместитель (роль commander/deputy_commander),
+        # то он видит абсолютно все задачи (кроме архива)
+        if user.role in ('commander', 'deputy_commander'):
+            qs = Task.objects.filter(parent_task__isnull=True, is_archived=False)
+        else:
+            # Для остальных — по подразделениям, где есть власть
+            unit_ids = get_units_under_authority(user)
+            qs = Task.objects.filter(
+                parent_task__isnull=True,
+                is_archived=False,
+                org_unit_id__in=unit_ids
+            )
+            # Добавляем задачи, где пользователь — исполнитель или создатель
+            qs = qs | Task.objects.filter(
+                parent_task__isnull=True,
+                is_archived=False,
+                assigned_to=user
+            ) | Task.objects.filter(
+                parent_task__isnull=True,
+                is_archived=False,
+                created_by=user
+            )
+            qs = qs.distinct()
+
+        # Добавляем глобальные задачи (is_global=True) – они видны всем
+        global_tasks = Task.objects.filter(parent_task__isnull=True, is_archived=False, is_global=True)
+        qs = qs.union(global_tasks).distinct()
+
+        qs = qs.select_related(
             'assigned_to', 'created_by', 'org_unit',
         ).prefetch_related('subtasks', 'attachments', 'comments')
 
-        if user.role not in ('commander', 'deputy_commander'):
-            visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
-            if hasattr(user, 'org_unit_id') and user.org_unit_id:
-                visibility_q |= Q(org_unit_id=user.org_unit_id)
-            qs = qs.filter(visibility_q).distinct()
-
+        # Дополнительные фильтры (опционально)
         org_unit = request.query_params.get('org_unit')
         if org_unit:
             qs = qs.filter(org_unit_id=org_unit)
@@ -201,13 +225,13 @@ class DashboardStatsView(APIView):
         user = request.user
         unit_ids = get_units_under_authority(user)
 
-        # ФИКС: В статистике тоже не учитываем архив
         if user.role in ('commander', 'deputy_commander'):
             qs = Task.objects.filter(is_archived=False)
         else:
             visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
             if hasattr(user, 'org_unit_id') and user.org_unit_id:
                 visibility_q |= Q(org_unit_id=user.org_unit_id)
+            visibility_q |= Q(is_global=True)
             qs = Task.objects.filter(visibility_q, is_archived=False).distinct()
 
         from datetime import timedelta
@@ -265,9 +289,23 @@ class CommentListCreateView(generics.ListCreateAPIView):
     serializer_class = CommentSerializer
 
     def get_queryset(self):
-        task_id = self.kwargs['task_pk']
-        return TaskComment.objects.filter(task_id=task_id).prefetch_related('attachments')
+        user = self.request.user
+        if not user.is_authenticated:
+            return Task.objects.none()
 
+        # Командиры видят все задачи
+        if user.role in ('commander', 'deputy_commander'):
+            return Task.objects.filter(is_archived=False).select_related(...).prefetch_related(...)
+
+        # Остальные — по подразделениям
+        unit_ids = get_units_under_authority(user)
+        qs = Task.objects.filter(is_archived=False).select_related(...).prefetch_related(...)
+        visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids)
+        if hasattr(user, 'org_unit_id') and user.org_unit_id:
+            visibility_q |= Q(org_unit_id=user.org_unit_id)
+        visibility_q |= Q(is_global=True)
+        return qs.filter(visibility_q).distinct()
+    
     def get_serializer_class(self):
         if self.request.method == 'POST':
             return CommentCreateSerializer
@@ -426,3 +464,29 @@ class UpdatePlannedTasksView(APIView):
             deadline__gte=timezone.now()
         ).update(status='todo')
         return Response({'updated': updated})
+    
+class TaskArchivedListView(generics.ListAPIView):
+    """
+    Возвращает только архивные задачи для текущего пользователя.
+    Командиры видят все архивные задачи, остальные – только те, к которым имеют доступ.
+    """
+    serializer_class = TaskListSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return Task.objects.none()
+
+        # Командиры и замы – все архивные задачи
+        if user.role in ('commander', 'deputy_commander'):
+            return Task.objects.filter(is_archived=True).select_related(
+                'assigned_to', 'created_by', 'org_unit'
+            ).prefetch_related('subtasks', 'attachments', 'comments')
+
+        # Остальные – только те архивные задачи, к которым есть доступ
+        unit_ids = get_units_under_authority(user)
+        visibility_q = Q(assigned_to=user) | Q(created_by=user) | Q(org_unit_id__in=unit_ids) | Q(is_global=True)
+        return Task.objects.filter(visibility_q, is_archived=True).select_related(
+            'assigned_to', 'created_by', 'org_unit'
+        ).prefetch_related('subtasks', 'attachments', 'comments').distinct()

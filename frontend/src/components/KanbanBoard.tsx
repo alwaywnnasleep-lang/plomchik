@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Calendar, Plus, X, AlertTriangle, Tag, MessageCircle, Send, Paperclip,
   Image, FileText, Download, Edit2, Trash2, CheckCircle, Upload, Paperclip as PaperclipIcon, 
-  UserPlus, Users, RefreshCw, Save, Clock, Filter, Archive, ArrowLeft, ArrowDownAZ, Shield // <-- Добавлено Shield
+  UserPlus, Users, RefreshCw, Save, Clock, Filter, Archive, ArrowLeft, ArrowDownAZ, Shield
 } from 'lucide-react';
 import type { Task, TaskStatus, Priority, User as UserType, TaskFile } from '@/types';
 import { cn } from '@/utils/cn';
@@ -104,11 +104,74 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   const [showArchive, setShowArchive] = useState(false);
   const [archiveSort, setArchiveSort] = useState<string>('date_desc');
   const [activeSort, setActiveSort] = useState<string>('priority_desc');
-
+  const [archiveTasks, setArchiveTasks] = useState<Task[]>([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
   const [users, setUsers] = useState<UserType[]>([]);
   const [units, setUnits] = useState<any[]>([]);
 
-  const [filters, setFilters] = useState({ unit: 'all', onlyMyTasks: false, deadline: 'all' });
+  const [filters, setFilters] = useState({ 
+    unit: 'all', 
+    onlyMyTasks: searchParams.get('onlyMyTasks') === 'true', 
+    deadline: searchParams.get('deadline') || 'all',
+    status: searchParams.get('status') || 'all',
+    priority: searchParams.get('priority') || 'all'
+  });
+
+  const getInitialDeadlineDays = (): number | null => {
+    const param = searchParams.get('deadline_days');
+    if (param !== null) {
+      const parsed = parseInt(param, 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+      if (param === 'all') return null;
+    }
+    const stored = localStorage.getItem('kanban_deadline_filter');
+    if (stored !== null) {
+      if (stored === 'all') return null;
+      const parsed = parseInt(stored, 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return null;
+  };
+
+  const [deadlineDaysFilter, setDeadlineDaysFilter] = useState<number | null>(getInitialDeadlineDays);
+  const [customDeadlineInput, setCustomDeadlineInput] = useState<string>('');
+
+  useEffect(() => {
+    const value = deadlineDaysFilter === null ? 'all' : deadlineDaysFilter.toString();
+    localStorage.setItem('kanban_deadline_filter', value);
+    setSearchParams(prev => {
+      prev.set('deadline_days', value);
+      return prev;
+    });
+  }, [deadlineDaysFilter, setSearchParams]);
+
+  useEffect(() => {
+    if (deadlineDaysFilter !== null && customDeadlineInput !== deadlineDaysFilter.toString()) {
+      setCustomDeadlineInput(deadlineDaysFilter.toString());
+    } else if (deadlineDaysFilter === null && customDeadlineInput !== '') {
+      setCustomDeadlineInput('');
+    }
+  }, [deadlineDaysFilter, customDeadlineInput]);
+
+  const handleSetDeadlineFilter = (days: number | null) => {
+    setDeadlineDaysFilter(days);
+  };
+
+  const handleCustomDeadlineChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setCustomDeadlineInput(val);
+    if (val === '') {
+      setDeadlineDaysFilter(null);
+    } else {
+      const num = parseInt(val, 10);
+      if (!isNaN(num) && num > 0) {
+        setDeadlineDaysFilter(num);
+      } else {
+        setDeadlineDaysFilter(null);
+      }
+    }
+  };
+
   const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
   const [extraUsers, setExtraUsers] = useState<Record<string, any>>({});
 
@@ -119,6 +182,14 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   useEffect(() => { draggedTaskRef.current = draggedTask; }, [draggedTask]);
 
   useEffect(() => {
+    setFilters(prev => ({
+      ...prev,
+      onlyMyTasks: searchParams.get('onlyMyTasks') === 'true',
+      deadline: searchParams.get('deadline') || 'all',
+      status: searchParams.get('status') || 'all',
+      priority: searchParams.get('priority') || 'all'
+    }));
+
     const taskId = searchParams.get('taskId');
     const view = searchParams.get('view');
     if (taskId && view === 'kanban' && tasks.length > 0) {
@@ -181,6 +252,17 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
     };
   }, []); 
 
+  const isWithinDeadlineDays = (task: Task): boolean => {
+    if (deadlineDaysFilter === null) return true;
+    if (!task.deadline) return true;
+    const deadlineDate = parseSafeDate(task.deadline);
+    if (!deadlineDate) return true;
+    const now = new Date();
+    const diffMs = deadlineDate.getTime() - now.getTime();
+    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    return diffDays <= deadlineDaysFilter;
+  };
+
   const filteredTasks = useMemo(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -213,9 +295,24 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
         }
       }
 
-      return matchesSearch && matchesUnit && matchesMy && matchesDeadline;
+      let matchesStatus = true;
+      if (filters.status !== 'all') {
+        const tStatus = String(t.status).toLowerCase();
+        if (filters.status === 'in_progress') matchesStatus = ['in_progress', 'review'].includes(tStatus);
+        else if (filters.status === 'planned') matchesStatus = ['planned', 'todo'].includes(tStatus);
+        else matchesStatus = tStatus === filters.status;
+      }
+
+      let matchesPriority = true;
+      if (filters.priority !== 'all') {
+        matchesPriority = String(t.priority).toLowerCase() === filters.priority;
+      }
+
+      const matchesDeadlineDays = isWithinDeadlineDays(t);
+
+      return matchesSearch && matchesUnit && matchesMy && matchesDeadline && matchesStatus && matchesPriority && matchesDeadlineDays;
     });
-  }, [tasks, searchQuery, filters, user?.id]);
+  }, [tasks, searchQuery, filters, user?.id, deadlineDaysFilter]);
 
   const sortedTasks = useMemo(() => {
     return [...filteredTasks].sort((a: Task, b: Task) => {
@@ -234,7 +331,12 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
     });
   }, [filteredTasks, activeSort]);
 
-  const activeFiltersCount = (filters.unit !== 'all' ? 1 : 0) + (filters.onlyMyTasks ? 1 : 0) + (filters.deadline !== 'all' ? 1 : 0);
+  const activeFiltersCount = (filters.unit !== 'all' ? 1 : 0) + 
+                             (filters.onlyMyTasks ? 1 : 0) + 
+                             (filters.deadline !== 'all' ? 1 : 0) +
+                             (filters.status !== 'all' ? 1 : 0) +
+                             (filters.priority !== 'all' ? 1 : 0) +
+                             (deadlineDaysFilter !== null ? 1 : 0);
 
   useEffect(() => {
     const idsToFetch = new Set<string>();
@@ -309,6 +411,20 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
     }
   };
 
+  const loadArchive = useCallback(async () => {
+    setArchiveLoading(true);
+    try {
+      const response = await api.getArchivedTasks();
+      const tasksList = Array.isArray(response) ? response : (response.results || []);
+      setArchiveTasks(tasksList);
+    } catch (error) {
+      console.error('Failed to load archive:', error);
+      setArchiveTasks([]);
+    } finally {
+      setArchiveLoading(false);
+    }
+  }, []);
+
   const handleAddTask = async (task: Omit<Task, 'id' | 'createdAt'>, files: File[]) => {
     try {
       const taskData: any = {
@@ -362,7 +478,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
   };
 
   if (showArchive) {
-    let archiveList = tasks.filter((t: Task) => t.is_archived);
+    let archiveList = archiveTasks;  // ИСПРАВЛЕНО: используем отдельный стейт archiveTasks, а не tasks
 
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -391,7 +507,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
     });
 
     return (
-      <div className="space-y-4 relative bg-white border border-slate-200 rounded-md shadow-sm p-6 min-h-[600px] animate-in fade-in">
+      <div className="space-y-4 relative bg-white border border-slate-200 rounded-md shadow-sm p-6 min-h-[600px]">
         <div className="flex items-center justify-between border-b border-slate-200 pb-4 mb-4 flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <button 
@@ -425,7 +541,12 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
           </div>
         </div>
 
-        {archiveList.length > 0 ? (
+        {archiveLoading ? (
+          <div className="text-center py-8">
+            <RefreshCw size={24} className="animate-spin text-slate-400 mx-auto" />
+            <p className="text-xs text-slate-500 mt-2">Загрузка архива...</p>
+          </div>
+        ) : archiveList.length > 0 ? (
           <div className="overflow-x-auto custom-scrollbar">
             <table className="w-full text-left">
               <thead>
@@ -514,8 +635,9 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
     );
   }
 
+  // Основная доска
   return (
-    <div className="space-y-4 relative animate-in fade-in duration-300">
+    <div className="space-y-4 relative">
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
           Активных задач: <span className="text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">{sortedTasks.filter((t: Task) => !t.is_archived && String(t.status).toLowerCase() !== 'archived' && !t.is_milestone && !(t.tags || []).some(tag => String(tag).toLowerCase() === 'мероприятие')).length}</span>
@@ -538,7 +660,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
           </div>
 
           <button 
-            onClick={() => setShowArchive(true)}
+            onClick={() => { setShowArchive(true); loadArchive(); }}
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-md shadow-sm"
           >
             <Archive size={14} />
@@ -570,10 +692,20 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                   <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Параметры</h3>
                   {activeFiltersCount > 0 && (
                     <button 
-                      onClick={() => setFilters({ unit: 'all', onlyMyTasks: false, deadline: 'all' })}
+                      onClick={() => {
+                        setFilters({ unit: 'all', onlyMyTasks: false, deadline: 'all', status: 'all', priority: 'all' });
+                        setDeadlineDaysFilter(null);
+                        setCustomDeadlineInput('');
+                        setSearchParams(prev => {
+                          const newParams = new URLSearchParams();
+                          if (prev.get('view')) newParams.set('view', prev.get('view')!);
+                          if (prev.get('taskId')) newParams.set('taskId', prev.get('taskId')!);
+                          return newParams;
+                        });
+                      }}
                       className="text-[10px] font-bold uppercase text-red-500 hover:text-red-700"
                     >
-                      Сбросить
+                      Сбросить всё
                     </button>
                   )}
                 </div>
@@ -594,7 +726,7 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Сроки</label>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Сроки (старый)</label>
                     <select
                       value={filters.deadline}
                       onChange={e => setFilters({ ...filters, deadline: e.target.value })}
@@ -605,6 +737,73 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
                       <option value="today">🔥 Сегодня</option>
                       <option value="week">📅 На этой неделе</option>
                     </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">
+                      Показать задачи с дедлайном в ближайшие (дней)
+                    </label>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      <button
+                        onClick={() => handleSetDeadlineFilter(null)}
+                        className={cn(
+                          "px-3 py-1 text-[10px] font-bold rounded border",
+                          deadlineDaysFilter === null ? "bg-green-600 text-white border-green-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        Все
+                      </button>
+                      <button
+                        onClick={() => handleSetDeadlineFilter(3)}
+                        className={cn(
+                          "px-3 py-1 text-[10px] font-bold rounded border",
+                          deadlineDaysFilter === 3 ? "bg-green-600 text-white border-green-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        3 дня
+                      </button>
+                      <button
+                        onClick={() => handleSetDeadlineFilter(7)}
+                        className={cn(
+                          "px-3 py-1 text-[10px] font-bold rounded border",
+                          deadlineDaysFilter === 7 ? "bg-green-600 text-white border-green-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        7 дней
+                      </button>
+                      <button
+                        onClick={() => handleSetDeadlineFilter(14)}
+                        className={cn(
+                          "px-3 py-1 text-[10px] font-bold rounded border",
+                          deadlineDaysFilter === 14 ? "bg-green-600 text-white border-green-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        14 дней
+                      </button>
+                      <button
+                        onClick={() => handleSetDeadlineFilter(30)}
+                        className={cn(
+                          "px-3 py-1 text-[10px] font-bold rounded border",
+                          deadlineDaysFilter === 30 ? "bg-green-600 text-white border-green-600" : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        30 дней
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={customDeadlineInput}
+                        onChange={handleCustomDeadlineChange}
+                        placeholder="Своё значение"
+                        className="w-full text-sm font-bold border border-slate-300 rounded px-3 py-2 bg-white focus:outline-none focus:border-green-500"
+                      />
+                      <span className="text-[10px] text-slate-400">дней</span>
+                    </div>
+                    <p className="text-[9px] text-slate-400 mt-1">
+                      Задачи без срока всегда видны.
+                    </p>
                   </div>
 
                   <label className="flex items-center gap-3 cursor-pointer p-2 -ml-2 hover:bg-slate-50 rounded border border-transparent hover:border-slate-100 transition-colors">
@@ -634,26 +833,13 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
         <div className="fixed inset-0 z-40" onClick={() => setIsFilterPanelOpen(false)}></div>
       )}
 
-      {/* ДОСКА С 4 КОЛОНКАМИ */}
       <div className="flex gap-4 overflow-x-auto pb-4 items-start custom-scrollbar">
         {columns.map(col => {
           const colTasks = sortedTasks.filter((t: Task) => {
             const isEvent = t.is_milestone || (t.tags || []).some(tag => String(tag).toLowerCase() === 'мероприятие');
             if (isEvent || t.is_archived || String(t.status).toLowerCase() === 'archived') return false;
-            
             const tStatus = (t.status || 'todo').toLowerCase();
-            
             if (col.id === 'todo') {
-              const parsedD = parseSafeDate(t.deadline || t.start_date || t.createdAt);
-              if (parsedD) {
-                 const today = new Date();
-                 today.setHours(12, 0, 0, 0);
-                 const taskDate = new Date(parsedD);
-                 taskDate.setHours(12, 0, 0, 0);
-                 
-                 const diffDays = Math.ceil((taskDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                 if (diffDays > 2) return false; 
-              }
               return ['todo', 'new', 'pending', 'planned'].includes(tStatus);
             }
             return tStatus === col.id;
@@ -738,6 +924,9 @@ export function KanbanBoard({ tasks, onTasksChange, searchQuery }: any) {
     </div>
   );
 }
+
+// Остальные компоненты (TaskCard, TaskDetailModal, TaskComments, TaskSubmission, AddTaskModal) остаются без изменений и не приведены здесь для краткости, но они уже есть в вашем файле и не требуют правок.
+
 
 function TaskCard({ task, users, extraUsers, units, onDragStart, onClick }: any) {
   const getSafeName = (id: string, fallback: any) => {

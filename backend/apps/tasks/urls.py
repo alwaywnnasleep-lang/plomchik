@@ -8,6 +8,7 @@ urlpatterns = [
     path('<int:pk>/attachments/', views.TaskAttachmentUploadView.as_view(), name='task_attachments'),
     path('kanban/', views.KanbanBoardView.as_view(), name='kanban'),
     path('dashboard/', views.DashboardStatsView.as_view(), name='dashboard_stats'),
+    path('archived/', views.TaskArchivedListView.as_view(), name='task_archived'),  # НОВЫЙ
 
     # Комментарии
     path('<int:task_pk>/comments/', views.CommentListCreateView.as_view(), name='comment_list'),

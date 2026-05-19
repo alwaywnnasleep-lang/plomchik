@@ -6,7 +6,6 @@ from django.db.models import Q, F
 
 class TaskQuerySet(models.QuerySet):
     def overdue(self):
-        """Возвращает задачи, у которых прошел дедлайн и которые не выполнены."""
         return self.filter(deadline__lt=now()).exclude(status=Task.Status.DONE)
 
 class Task(models.Model):
@@ -63,10 +62,8 @@ class Task(models.Model):
     start_date = models.DateTimeField('Дата начала', null=True, blank=True)
     end_date = models.DateTimeField('Дата окончания', null=True, blank=True)
     is_milestone = models.BooleanField('Мероприятие календаря', default=False)
-    
-    # ФИКС: Поле для архивации выполненных задач
     is_archived = models.BooleanField('В архиве', default=False)
-    
+    is_global = models.BooleanField('Глобальная задача (видна всем)', default=False)
     tags = models.JSONField('Теги', default=list)
     order = models.IntegerField('Порядок', default=0, validators=[MinValueValidator(0)])
     created_at = models.DateTimeField('Создано', auto_now_add=True)
@@ -94,7 +91,8 @@ class Task(models.Model):
             models.Index(fields=['-created_at']),
             models.Index(fields=['start_date']),
             models.Index(fields=['end_date']),
-            models.Index(fields=['is_archived']), # Индекс для быстрого фильтра
+            models.Index(fields=['is_archived']),
+            models.Index(fields=['is_global']),
         ]
         constraints = [
             models.CheckConstraint(
@@ -105,7 +103,6 @@ class Task(models.Model):
 
     def __str__(self):
         return self.title
-
 
 class AbstractAttachment(models.Model):
     filename = models.CharField('Имя файла', max_length=255)
@@ -121,14 +118,8 @@ class AbstractAttachment(models.Model):
     class Meta:
         abstract = True
 
-
 class TaskAttachment(AbstractAttachment):
-    task = models.ForeignKey(
-        Task,
-        on_delete=models.CASCADE,
-        related_name='attachments',
-        verbose_name='Задача'
-    )
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='attachments', verbose_name='Задача')
     file = models.FileField('Файл', upload_to='task_attachments/%Y/%m/%d/')
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -142,29 +133,14 @@ class TaskAttachment(AbstractAttachment):
     class Meta:
         verbose_name = 'Вложение задачи'
         verbose_name_plural = 'Вложения задач'
-        indexes = [
-            models.Index(fields=['task']),
-            models.Index(fields=['uploaded_by']),
-        ]
+        indexes = [models.Index(fields=['task']), models.Index(fields=['uploaded_by'])]
 
     def __str__(self):
         return self.filename
 
-
 class TaskComment(models.Model):
-    task = models.ForeignKey(
-        Task,
-        on_delete=models.CASCADE,
-        related_name='comments',
-        verbose_name='Задача'
-    )
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        verbose_name='Автор',
-        related_name='task_comments'
-    )
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='comments', verbose_name='Задача')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, verbose_name='Автор', related_name='task_comments')
     text = models.TextField('Текст комментария')
     created_at = models.DateTimeField('Создано', auto_now_add=True)
     updated_at = models.DateTimeField('Обновлено', auto_now=True)
@@ -177,14 +153,8 @@ class TaskComment(models.Model):
     def __str__(self):
         return f'Комментарий к {self.task} от {self.user}'
 
-
 class CommentAttachment(AbstractAttachment):
-    comment = models.ForeignKey(
-        TaskComment,
-        on_delete=models.CASCADE,
-        related_name='attachments',
-        verbose_name='Комментарий'
-    )
+    comment = models.ForeignKey(TaskComment, on_delete=models.CASCADE, related_name='attachments', verbose_name='Комментарий')
     file = models.FileField('Файл', upload_to='comment_attachments/%Y/%m/%d/')
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -202,25 +172,14 @@ class CommentAttachment(AbstractAttachment):
     def __str__(self):
         return self.filename
 
-
 class TaskSubmission(models.Model):
     class Status(models.TextChoices):
         PENDING = 'pending', 'На проверке'
         APPROVED = 'approved', 'Принято'
         REJECTED = 'rejected', 'Отклонено'
 
-    task = models.OneToOneField(
-        Task,
-        on_delete=models.CASCADE,
-        related_name='submission',
-        verbose_name='Задача'
-    )
-    status = models.CharField(
-        'Статус',
-        max_length=10,
-        choices=Status.choices,
-        default=Status.PENDING
-    )
+    task = models.OneToOneField(Task, on_delete=models.CASCADE, related_name='submission', verbose_name='Задача')
+    status = models.CharField('Статус', max_length=10, choices=Status.choices, default=Status.PENDING)
     comment = models.TextField('Комментарий к сдаче', blank=True, default='')
     submitted_at = models.DateTimeField('Дата сдачи', auto_now_add=True)
     reviewed_by = models.ForeignKey(
@@ -241,14 +200,8 @@ class TaskSubmission(models.Model):
     def __str__(self):
         return f'Сдача {self.task}'
 
-
 class SubmissionAttachment(AbstractAttachment):
-    submission = models.ForeignKey(
-        TaskSubmission,
-        on_delete=models.CASCADE,
-        related_name='files',
-        verbose_name='Сдача'
-    )
+    submission = models.ForeignKey(TaskSubmission, on_delete=models.CASCADE, related_name='files', verbose_name='Сдача')
     file = models.FileField('Файл', upload_to='submission_attachments/%Y/%m/%d/')
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

@@ -56,8 +56,7 @@ class CommentSerializer(serializers.ModelSerializer):
 class CommentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskComment
-        # ФИКС: Добавили id и created_at, чтобы фронтенд мог прикреплять файлы
-        fields = ['id', 'text', 'created_at'] 
+        fields = ['id', 'text', 'created_at']
         read_only_fields = ['id', 'created_at']
 
 
@@ -109,10 +108,10 @@ class TaskListSerializer(serializers.ModelSerializer):
     creator_detail = UserShortSerializer(source='created_by', read_only=True)
     tags = serializers.JSONField(required=False, default=list)
     submission = serializers.SerializerMethodField()
-    
     subtasks = SubtaskSerializer(many=True, read_only=True)
     attachments = TaskAttachmentSerializer(many=True, read_only=True)
     comments = CommentSerializer(many=True, read_only=True)
+    is_global = serializers.BooleanField(read_only=False, required=False, default=False)
 
     class Meta:
         model = Task
@@ -122,7 +121,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             'created_by', 'creator_detail',
             'org_unit', 'tags', 'created_at', 'order',
             'submission', 'subtasks', 'attachments', 'comments',
-            'is_archived', 'is_milestone'  # ФИКС: Добавлены новые поля
+            'is_archived', 'is_milestone', 'is_global'
         ]
 
     def get_submission(self, obj):
@@ -140,6 +139,7 @@ class TaskDetailSerializer(serializers.ModelSerializer):
     comments = CommentSerializer(many=True, read_only=True)
     submission = TaskSubmissionSerializer(read_only=True)
     tags = serializers.JSONField(required=False, default=list)
+    is_global = serializers.BooleanField(read_only=False, required=False, default=False)
 
     class Meta:
         model = Task
@@ -150,7 +150,7 @@ class TaskDetailSerializer(serializers.ModelSerializer):
             'org_unit', 'deadline', 'start_date', 'end_date', 'tags',
             'subtasks', 'attachments', 'comments', 'submission',
             'created_at', 'updated_at', 'order',
-            'is_archived', 'is_milestone'  # ФИКС: Добавлены новые поля
+            'is_archived', 'is_milestone', 'is_global'
         ]
 
 
@@ -159,19 +159,19 @@ class TaskCreateSerializer(serializers.ModelSerializer):
         child=serializers.DictField(), required=False, write_only=True
     )
     tags = serializers.JSONField(required=False, default=list)
+    is_global = serializers.BooleanField(required=False, default=False)
 
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'description', 'status', 'priority',
             'org_unit', 'assigned_to', 'deadline', 'start_date', 'end_date',
-            'tags', 'subtasks_data', 'is_archived', 'is_milestone' # ФИКС: Добавлены новые поля
+            'tags', 'subtasks_data', 'is_archived', 'is_milestone', 'is_global'
         ]
 
     def create(self, validated_data):
         subtasks_data = validated_data.pop('subtasks_data', [])
         task = Task.objects.create(**validated_data)
-        
         for st_data in subtasks_data:
             Task.objects.create(
                 parent_task=task,
@@ -187,7 +187,6 @@ class TaskCreateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         subtasks_data = validated_data.pop('subtasks_data', None)
         instance = super().update(instance, validated_data)
-        
         if subtasks_data is not None:
             instance.subtasks.all().delete()
             for st_data in subtasks_data:

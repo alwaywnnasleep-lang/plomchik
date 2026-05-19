@@ -7,7 +7,11 @@ class CanCreateTask(BasePermission):
             return True
         if not request.user.is_authenticated:
             return False
+        # Если пытаемся создать глобальную задачу, разрешаем только командирам и заместителям
+        if request.method == 'POST' and request.data.get('is_global'):
+            return request.user.role in ('commander', 'deputy_commander')
         return request.user.role in ('commander', 'deputy_commander', 'department_head', 'group_head')
+
 
 class CanManageTask(BasePermission):
     def has_permission(self, request, view):

@@ -467,7 +467,10 @@ class ApiService {
   async updatePlannedTasks() {
     return this.request('/tasks/update-planned/', { method: 'POST' });
   }
-
+// ========== Архив задач ==========
+  async getArchivedTasks() {
+      return this.request('/tasks/archived/');
+}
   // ========== База Знаний ==========
   getKnowledgeDocuments(params?: Record<string, string>) {
     const query = params ? '?' + new URLSearchParams(params) : '';

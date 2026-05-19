@@ -56,7 +56,6 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
     return () => { isMounted = false; };
   }, []);
 
-  // ИСПРАВЛЕНИЕ 1: Перенаправляем клик по задаче в Канбан-доску
   const handleTaskClick = (taskId: string) => {
     navigate(`/tasks?view=kanban&taskId=${taskId}`);
   };
@@ -73,7 +72,6 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
     return task.is_milestone || tags.includes('мероприятие');
   };
 
-  // ИСПРАВЛЕНИЕ 2: Жестко отсекаем задачи, которые помечены как архивные
   const justTasks = tasks.filter(t => !isEvent(t) && !t.is_archived && String(t.status).toLowerCase() !== 'archived');
   const justEvents = tasks.filter(t => isEvent(t) && !t.is_archived && String(t.status).toLowerCase() !== 'archived');
 
@@ -102,12 +100,12 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
   }, [justTasks, user]);
 
   const stats = [
-    { label: 'Всего задач', value: totalTasks, icon: ListTodo, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
-    { label: 'В работе', value: inProgress, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100' },
-    { label: 'Выполнено', value: done, icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
-    { label: 'Критичные', value: critical, icon: AlertTriangle, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100' },
-    { label: 'Просрочено', value: overdue, icon: FileWarning, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100' },
-    { label: 'Запланировано', value: plannedTasks, icon: CalendarDays, color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-100' },
+    { label: 'Всего задач', value: totalTasks, icon: ListTodo, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100', query: '' },
+    { label: 'В работе', value: inProgress, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100', query: '&status=in_progress' },
+    { label: 'Выполнено', value: done, icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100', query: '&status=done' },
+    { label: 'Критичные', value: critical, icon: AlertTriangle, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100', query: '&priority=critical' },
+    { label: 'Просрочено', value: overdue, icon: FileWarning, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100', query: '&deadline=overdue' },
+    { label: 'Запланировано', value: plannedTasks, icon: CalendarDays, color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-100', query: '&status=planned' },
   ];
 
   const statusLabels: Record<string, string> = {
@@ -135,19 +133,21 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
   }
 
   return (
-    <div className="space-y-6 pb-10 animate-in fade-in duration-300">
+    <div className="space-y-6 pb-10">
       
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-3">
             Панель управления
           </h1>
-          
         </div>
         
         <div className="flex items-center gap-4">
           {myActiveTasks > 0 && (
-            <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-100 rounded-xl cursor-pointer hover:bg-blue-100 transition-colors">
+            <div 
+              onClick={() => navigate('/tasks?view=kanban&onlyMyTasks=true')}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-100 rounded-xl cursor-pointer hover:bg-blue-100 transition-colors"
+            >
               <Target size={18} className="text-blue-600" />
               <div className="text-sm">
                 <span className="text-slate-600">Мои задачи: </span>
@@ -165,7 +165,11 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {stats.map(s => (
-          <div key={s.label} className={cn("bg-white rounded-2xl border p-4 shadow-sm transition-transform hover:-translate-y-1 hover:shadow-md", s.border)}>
+          <div 
+            key={s.label} 
+            onClick={() => navigate(`/tasks?view=kanban${s.query}`)}
+            className={cn("bg-white rounded-2xl border p-4 shadow-sm hover:shadow-md cursor-pointer", s.border)}
+          >
             <div className="flex items-center gap-2 mb-3">
               <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", s.bg, s.color)}>
                 <s.icon size={20} />
@@ -186,7 +190,11 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
           </h3>
           <div className="space-y-4 flex-1">
             {statusCounts.map(s => (
-              <div key={s.key} className="group">
+              <div 
+                key={s.key} 
+                onClick={() => navigate(`/tasks?view=kanban&status=${s.key}`)}
+                className="group cursor-pointer hover:bg-slate-50 p-1.5 -mx-1.5 rounded"
+              >
                 <div className="flex justify-between text-sm mb-1.5">
                   <span className="text-slate-600 font-medium group-hover:text-blue-600 transition-colors">{s.label}</span>
                   <span className="font-bold text-slate-800">{s.count}</span>
@@ -194,7 +202,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
                 <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
                   <div
                     className={cn(
-                      "h-full rounded-full transition-all duration-1000",
+                      "h-full rounded-full",
                       s.key === 'done' ? 'bg-emerald-500' : 
                       s.key === 'in_progress' ? 'bg-amber-500' :
                       s.key === 'review' ? 'bg-pink-500' : 'bg-blue-500'
@@ -239,7 +247,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
                   <div 
                     key={event.id} 
                     onClick={() => handleEventClick(event)}
-                    className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-indigo-50/30 hover:bg-indigo-50 hover:border-indigo-100 transition-all cursor-pointer group"
+                    className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-indigo-50/30 hover:bg-indigo-50 hover:border-indigo-100 cursor-pointer group"
                   >
                     <div className="mt-1 w-2.5 h-2.5 rounded-full bg-indigo-500 flex-shrink-0 shadow-sm" />
                     <div className="flex-1 min-w-0">
@@ -291,7 +299,7 @@ export function Dashboard({ tasks = [] }: DashboardProps) {
                     key={t.id} 
                     onClick={() => handleTaskClick(t.id)}
                     className={cn(
-                      "flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer group",
+                      "flex items-start gap-3 p-3 rounded-xl border cursor-pointer group",
                       isOverdue ? "bg-red-50/50 border-red-100 hover:bg-red-50" : 
                       isToday ? "bg-amber-50/50 border-amber-100 hover:bg-amber-50" : 
                       "bg-white border-slate-100 hover:border-slate-300 hover:shadow-sm"
